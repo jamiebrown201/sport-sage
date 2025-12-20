@@ -130,7 +130,6 @@ export class ScraperStack extends cdk.Stack {
     settlementHandler.addEventSource(
       new eventsources.SqsEventSource(settlementQueue, {
         batchSize: 10,
-        maxBatchingWindow: cdk.Duration.seconds(10),
         reportBatchItemFailures: true,
       })
     );
