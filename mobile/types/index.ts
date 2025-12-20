@@ -398,6 +398,55 @@ export interface UserAchievement {
 }
 
 // ============================================================================
+// ACCUMULATORS
+// ============================================================================
+
+export type AccumulatorStatus = 'building' | 'placed' | 'won' | 'lost' | 'partial' | 'void';
+
+export interface AccumulatorSelection {
+  id: string;
+  eventId: string;
+  event: Event;
+  outcomeId: string;
+  outcome: Outcome;
+  odds: number;
+  status: 'pending' | 'won' | 'lost' | 'void';
+}
+
+export interface Accumulator {
+  id: string;
+  selections: AccumulatorSelection[];
+  stake: number;
+  totalOdds: number;
+  potentialCoins: number;
+  potentialStars: number;
+  starsMultiplier: number;
+  status: AccumulatorStatus;
+  placedAt?: string;
+  settledAt?: string;
+  createdAt: string;
+}
+
+// Accumulator limits
+export const ACCUMULATOR_LIMITS = {
+  minSelections: 2,
+  maxSelections: 10,
+  minStake: 10,
+  maxStake: 500,
+  bonusMultipliers: {
+    2: 1.0,    // No bonus for 2-fold
+    3: 1.05,   // 5% bonus for 3-fold
+    4: 1.10,   // 10% bonus
+    5: 1.15,   // 15% bonus
+    6: 1.20,   // 20% bonus
+    7: 1.30,   // 30% bonus
+    8: 1.40,   // 40% bonus
+    9: 1.50,   // 50% bonus
+    10: 1.75,  // 75% bonus for max 10-fold
+  } as Record<number, number>,
+};
+
+// ============================================================================
 // AUTH CONTEXT
 // ============================================================================
 

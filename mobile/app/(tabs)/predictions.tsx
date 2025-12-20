@@ -1,34 +1,86 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { MotiView } from 'moti';
-import { usePredictions } from '@/lib/store';
+import { usePredictions, useAccumulator } from '@/lib/store';
 import { PredictionCard } from '@/components/PredictionCard';
-import { TargetIcon, PendingIcon, WonIcon, LostIcon } from '@/components/icons';
+import { AccumulatorCard } from '@/components/AccumulatorCard';
+import { TargetIcon, PendingIcon, WonIcon, LostIcon, LayersIcon } from '@/components/icons';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
 
+type ViewType = 'singles' | 'accumulators';
 type FilterType = 'all' | 'pending' | 'won' | 'lost';
 
 export default function PredictionsScreen(): React.ReactElement {
+  const [viewType, setViewType] = useState<ViewType>('singles');
   const [filter, setFilter] = useState<FilterType>('all');
   const { predictions } = usePredictions();
+  const { accumulators } = useAccumulator();
 
   const filteredPredictions = predictions.filter((p) => {
     if (filter === 'all') return true;
     return p.status === filter;
   });
 
-  const pendingCount = predictions.filter((p) => p.status === 'pending').length;
-  const wonCount = predictions.filter((p) => p.status === 'won').length;
-  const lostCount = predictions.filter((p) => p.status === 'lost').length;
+  const filteredAccumulators = accumulators.filter((a) => {
+    if (filter === 'all') return true;
+    if (filter === 'pending') return a.status === 'placed';
+    return a.status === filter;
+  });
+
+  const pendingCount = viewType === 'singles'
+    ? predictions.filter((p) => p.status === 'pending').length
+    : accumulators.filter((a) => a.status === 'placed').length;
+
+  const wonCount = viewType === 'singles'
+    ? predictions.filter((p) => p.status === 'won').length
+    : accumulators.filter((a) => a.status === 'won').length;
+
+  const lostCount = viewType === 'singles'
+    ? predictions.filter((p) => p.status === 'lost').length
+    : accumulators.filter((a) => a.status === 'lost').length;
+
+  const totalCount = viewType === 'singles' ? predictions.length : accumulators.length;
 
   return (
     <View style={styles.container}>
+      {/* View Type Toggle */}
+      <View style={styles.viewToggle}>
+        <Pressable
+          onPress={() => setViewType('singles')}
+          style={[styles.toggleButton, viewType === 'singles' && styles.toggleButtonActive]}
+        >
+          <TargetIcon size={18} color={viewType === 'singles' ? colors.primary : colors.textMuted} />
+          <Text style={[styles.toggleText, viewType === 'singles' && styles.toggleTextActive]}>
+            Singles
+          </Text>
+          <View style={[styles.toggleBadge, viewType === 'singles' && styles.toggleBadgeActive]}>
+            <Text style={[styles.toggleBadgeText, viewType === 'singles' && styles.toggleBadgeTextActive]}>
+              {predictions.length}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={() => setViewType('accumulators')}
+          style={[styles.toggleButton, viewType === 'accumulators' && styles.toggleButtonActive]}
+        >
+          <LayersIcon size={18} color={viewType === 'accumulators' ? colors.primary : colors.textMuted} />
+          <Text style={[styles.toggleText, viewType === 'accumulators' && styles.toggleTextActive]}>
+            Accas
+          </Text>
+          <View style={[styles.toggleBadge, viewType === 'accumulators' && styles.toggleBadgeActive]}>
+            <Text style={[styles.toggleBadgeText, viewType === 'accumulators' && styles.toggleBadgeTextActive]}>
+              {accumulators.length}
+            </Text>
+          </View>
+        </Pressable>
+      </View>
+
       {/* Filter Tabs */}
       <View style={styles.filterRow}>
         <FilterTab
           label="All"
-          count={predictions.length}
+          count={totalCount}
           selected={filter === 'all'}
           onPress={() => setFilter('all')}
         />
@@ -55,45 +107,81 @@ export default function PredictionsScreen(): React.ReactElement {
         />
       </View>
 
-      {/* Predictions List */}
+      {/* Content List */}
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-        {filteredPredictions.length > 0 ? (
-          filteredPredictions.map((prediction, index) => (
-            <MotiView
-              key={prediction.id}
-              from={{ opacity: 0, translateY: 10 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: 'timing', duration: 300, delay: index * 50 }}
-            >
-              <PredictionCard prediction={prediction} />
-            </MotiView>
-          ))
+        {viewType === 'singles' ? (
+          // Singles view
+          filteredPredictions.length > 0 ? (
+            filteredPredictions.map((prediction, index) => (
+              <MotiView
+                key={prediction.id}
+                from={{ opacity: 0, translateY: 10 }}
+                animate={{ opacity: 1, translateY: 0 }}
+                transition={{ type: 'timing', duration: 300, delay: index * 50 }}
+              >
+                <PredictionCard prediction={prediction} />
+              </MotiView>
+            ))
+          ) : (
+            <EmptyState filter={filter} type="singles" />
+          )
         ) : (
-          <View style={styles.emptyState}>
-            <View style={styles.emptyIconContainer}>
-              {filter === 'pending' ? (
-                <PendingIcon size={48} color={colors.warning} />
-              ) : filter === 'won' ? (
-                <WonIcon size={48} color={colors.success} />
-              ) : filter === 'lost' ? (
-                <LostIcon size={48} color={colors.error} />
-              ) : (
-                <TargetIcon size={48} color={colors.textMuted} />
-              )}
-            </View>
-            <Text style={styles.emptyText}>
-              {filter === 'all'
-                ? 'No predictions yet'
-                : `No ${filter} predictions`}
-            </Text>
-            <Text style={styles.emptySubtext}>
-              {filter === 'all'
-                ? 'Place your first prediction to get started!'
-                : `Your ${filter} predictions will appear here`}
-            </Text>
-          </View>
+          // Accumulators view
+          filteredAccumulators.length > 0 ? (
+            filteredAccumulators.map((accumulator, index) => (
+              <MotiView
+                key={accumulator.id}
+                from={{ opacity: 0, translateY: 10 }}
+                animate={{ opacity: 1, translateY: 0 }}
+                transition={{ type: 'timing', duration: 300, delay: index * 50 }}
+              >
+                <AccumulatorCard accumulator={accumulator} />
+              </MotiView>
+            ))
+          ) : (
+            <EmptyState filter={filter} type="accumulators" />
+          )
         )}
       </ScrollView>
+    </View>
+  );
+}
+
+interface EmptyStateProps {
+  filter: FilterType;
+  type: ViewType;
+}
+
+function EmptyState({ filter, type }: EmptyStateProps): React.ReactElement {
+  const typeLabel = type === 'singles' ? 'predictions' : 'accumulators';
+
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconContainer}>
+        {type === 'accumulators' ? (
+          <LayersIcon size={48} color={colors.textMuted} />
+        ) : filter === 'pending' ? (
+          <PendingIcon size={48} color={colors.warning} />
+        ) : filter === 'won' ? (
+          <WonIcon size={48} color={colors.success} />
+        ) : filter === 'lost' ? (
+          <LostIcon size={48} color={colors.error} />
+        ) : (
+          <TargetIcon size={48} color={colors.textMuted} />
+        )}
+      </View>
+      <Text style={styles.emptyText}>
+        {filter === 'all'
+          ? `No ${typeLabel} yet`
+          : `No ${filter} ${typeLabel}`}
+      </Text>
+      <Text style={styles.emptySubtext}>
+        {type === 'accumulators'
+          ? 'Build an accumulator by adding multiple selections'
+          : filter === 'all'
+          ? 'Place your first prediction to get started!'
+          : `Your ${filter} ${typeLabel} will appear here`}
+      </Text>
     </View>
   );
 }
@@ -152,6 +240,54 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  viewToggle: {
+    flexDirection: 'row',
+    paddingHorizontal: layout.spacing.md,
+    paddingTop: layout.spacing.md,
+    gap: layout.spacing.sm,
+  },
+  toggleButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: layout.spacing.xs,
+    paddingVertical: layout.spacing.sm,
+    paddingHorizontal: layout.spacing.md,
+    borderRadius: layout.borderRadius.lg,
+    backgroundColor: colors.card,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  toggleButtonActive: {
+    backgroundColor: colors.primaryDim,
+    borderColor: colors.primary,
+  },
+  toggleText: {
+    fontSize: layout.fontSize.md,
+    color: colors.textMuted,
+    fontWeight: layout.fontWeight.semibold,
+  },
+  toggleTextActive: {
+    color: colors.primary,
+  },
+  toggleBadge: {
+    backgroundColor: colors.cardElevated,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: layout.borderRadius.full,
+  },
+  toggleBadgeActive: {
+    backgroundColor: `${colors.primary}30`,
+  },
+  toggleBadgeText: {
+    fontSize: layout.fontSize.xs,
+    color: colors.textMuted,
+    fontWeight: layout.fontWeight.bold,
+  },
+  toggleBadgeTextActive: {
+    color: colors.primary,
   },
   filterRow: {
     flexDirection: 'row',

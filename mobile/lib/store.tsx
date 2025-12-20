@@ -9,6 +9,11 @@ import {
   Transaction,
   UserChallengeProgress,
   UserAchievement,
+  AccumulatorSelection,
+  Accumulator,
+  Event,
+  Outcome,
+  ACCUMULATOR_LIMITS,
 } from '@/types';
 import {
   mockUser,
@@ -32,6 +37,8 @@ const STORAGE_KEYS = {
   TRANSACTIONS: '@sport_sage_transactions',
   CHALLENGES: '@sport_sage_challenges',
   ACHIEVEMENTS: '@sport_sage_achievements',
+  ACCUMULATORS: '@sport_sage_accumulators',
+  CURRENT_ACCA: '@sport_sage_current_acca',
   ONBOARDING_COMPLETE: '@sport_sage_onboarding',
 };
 
@@ -682,6 +689,231 @@ export function useAchievements(): AchievementsContextType {
 }
 
 // ============================================================================
+// ACCUMULATOR CONTEXT
+// ============================================================================
+
+interface AccumulatorContextType {
+  // Current slip being built
+  currentSelections: AccumulatorSelection[];
+  addSelection: (event: Event, outcome: Outcome) => boolean;
+  removeSelection: (eventId: string) => void;
+  clearSelections: () => void;
+  hasSelection: (eventId: string) => boolean;
+  getSelectedOutcome: (eventId: string) => Outcome | null;
+
+  // Calculated values
+  totalOdds: number;
+  bonusMultiplier: number;
+  canPlace: boolean;
+
+  // Place bet
+  placeAccumulator: (stake: number) => Accumulator | null;
+
+  // History
+  accumulators: Accumulator[];
+  getPendingAccumulators: () => Accumulator[];
+  getSettledAccumulators: () => Accumulator[];
+}
+
+const AccumulatorContext = createContext<AccumulatorContextType | null>(null);
+
+interface AccumulatorProviderProps {
+  children: React.ReactNode;
+}
+
+export function AccumulatorProvider({ children }: AccumulatorProviderProps): React.ReactElement {
+  const [currentSelections, setCurrentSelections] = useState<AccumulatorSelection[]>([]);
+  const [accumulators, setAccumulators] = useState<Accumulator[]>([]);
+  const { user, updateUser, stats, updateStats } = useAuth();
+
+  useEffect(() => {
+    loadAccumulatorData();
+  }, []);
+
+  const loadAccumulatorData = async (): Promise<void> => {
+    try {
+      const storedAccas = await AsyncStorage.getItem(STORAGE_KEYS.ACCUMULATORS);
+      const storedCurrent = await AsyncStorage.getItem(STORAGE_KEYS.CURRENT_ACCA);
+
+      if (storedAccas) {
+        setAccumulators(JSON.parse(storedAccas));
+      }
+      if (storedCurrent) {
+        setCurrentSelections(JSON.parse(storedCurrent));
+      }
+    } catch (error) {
+      console.error('Failed to load accumulator data:', error);
+    }
+  };
+
+  const saveAccumulators = async (accas: Accumulator[]): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.ACCUMULATORS, JSON.stringify(accas));
+    } catch (error) {
+      console.error('Failed to save accumulators:', error);
+    }
+  };
+
+  const saveCurrentSelections = async (selections: AccumulatorSelection[]): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.CURRENT_ACCA, JSON.stringify(selections));
+    } catch (error) {
+      console.error('Failed to save current selections:', error);
+    }
+  };
+
+  // Calculate total odds (multiply all selection odds)
+  const totalOdds = currentSelections.reduce((acc, sel) => acc * sel.odds, 1);
+
+  // Get bonus multiplier based on number of selections
+  const bonusMultiplier = ACCUMULATOR_LIMITS.bonusMultipliers[
+    Math.min(currentSelections.length, 10)
+  ] ?? 1.0;
+
+  // Can place if we have at least min selections
+  const canPlace = currentSelections.length >= ACCUMULATOR_LIMITS.minSelections;
+
+  const addSelection = useCallback((event: Event, outcome: Outcome): boolean => {
+    // Check if already have max selections
+    if (currentSelections.length >= ACCUMULATOR_LIMITS.maxSelections) {
+      return false;
+    }
+
+    // Check if already have a selection from this event
+    if (currentSelections.some(s => s.eventId === event.id)) {
+      return false;
+    }
+
+    const newSelection: AccumulatorSelection = {
+      id: `sel_${Date.now()}_${event.id}`,
+      eventId: event.id,
+      event,
+      outcomeId: outcome.id,
+      outcome,
+      odds: outcome.odds,
+      status: 'pending',
+    };
+
+    setCurrentSelections(prev => {
+      const updated = [...prev, newSelection];
+      saveCurrentSelections(updated);
+      return updated;
+    });
+
+    return true;
+  }, [currentSelections]);
+
+  const removeSelection = useCallback((eventId: string): void => {
+    setCurrentSelections(prev => {
+      const updated = prev.filter(s => s.eventId !== eventId);
+      saveCurrentSelections(updated);
+      return updated;
+    });
+  }, []);
+
+  const clearSelections = useCallback((): void => {
+    setCurrentSelections([]);
+    saveCurrentSelections([]);
+  }, []);
+
+  const hasSelection = useCallback((eventId: string): boolean => {
+    return currentSelections.some(s => s.eventId === eventId);
+  }, [currentSelections]);
+
+  const getSelectedOutcome = useCallback((eventId: string): Outcome | null => {
+    const selection = currentSelections.find(s => s.eventId === eventId);
+    return selection?.outcome ?? null;
+  }, [currentSelections]);
+
+  const placeAccumulator = useCallback((stake: number): Accumulator | null => {
+    if (!user || !stats) return null;
+    if (!canPlace) return null;
+    if (stake < ACCUMULATOR_LIMITS.minStake || stake > ACCUMULATOR_LIMITS.maxStake) return null;
+    if (user.coins < stake) return null;
+
+    // Calculate potential returns
+    const potentialCoins = Math.floor(stake * totalOdds * bonusMultiplier);
+
+    // Stars calculation (base stars from odds, with multiplier from subscription)
+    const baseStars = Math.floor((totalOdds - 1) * 10 * currentSelections.length);
+    const starsMultiplier = user.subscriptionTier === 'elite' ? 1.25 : 1.0;
+    const potentialStars = Math.floor(baseStars * starsMultiplier);
+
+    const newAccumulator: Accumulator = {
+      id: `acca_${Date.now()}`,
+      selections: [...currentSelections],
+      stake,
+      totalOdds,
+      potentialCoins,
+      potentialStars,
+      starsMultiplier,
+      status: 'placed',
+      placedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    // Deduct stake from user
+    updateUser({ coins: user.coins - stake });
+
+    // Update stats
+    updateStats({
+      totalPredictions: stats.totalPredictions + 1,
+      totalCoinsWagered: stats.totalCoinsWagered + stake,
+    });
+
+    // Save accumulator
+    setAccumulators(prev => {
+      const updated = [newAccumulator, ...prev];
+      saveAccumulators(updated);
+      return updated;
+    });
+
+    // Clear current selections
+    clearSelections();
+
+    return newAccumulator;
+  }, [user, stats, canPlace, totalOdds, bonusMultiplier, currentSelections, updateUser, updateStats, clearSelections]);
+
+  const getPendingAccumulators = useCallback((): Accumulator[] => {
+    return accumulators.filter(a => a.status === 'placed');
+  }, [accumulators]);
+
+  const getSettledAccumulators = useCallback((): Accumulator[] => {
+    return accumulators.filter(a => ['won', 'lost', 'partial', 'void'].includes(a.status));
+  }, [accumulators]);
+
+  const value: AccumulatorContextType = {
+    currentSelections,
+    addSelection,
+    removeSelection,
+    clearSelections,
+    hasSelection,
+    getSelectedOutcome,
+    totalOdds,
+    bonusMultiplier,
+    canPlace,
+    placeAccumulator,
+    accumulators,
+    getPendingAccumulators,
+    getSettledAccumulators,
+  };
+
+  return (
+    <AccumulatorContext.Provider value={value}>
+      {children}
+    </AccumulatorContext.Provider>
+  );
+}
+
+export function useAccumulator(): AccumulatorContextType {
+  const context = useContext(AccumulatorContext);
+  if (!context) {
+    throw new Error('useAccumulator must be used within an AccumulatorProvider');
+  }
+  return context;
+}
+
+// ============================================================================
 // COMBINED STORE PROVIDER
 // ============================================================================
 
@@ -695,7 +927,9 @@ export function StoreProvider({ children }: StoreProviderProps): React.ReactElem
       <WalletProviderWrapper>
         <PredictionsProvider>
           <ChallengesProviderWrapper>
-            <AchievementsProviderWrapper>{children}</AchievementsProviderWrapper>
+            <AchievementsProviderWrapper>
+              <AccumulatorProviderWrapper>{children}</AccumulatorProviderWrapper>
+            </AchievementsProviderWrapper>
           </ChallengesProviderWrapper>
         </PredictionsProvider>
       </WalletProviderWrapper>
@@ -713,4 +947,8 @@ function ChallengesProviderWrapper({ children }: { children: React.ReactNode }):
 
 function AchievementsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
   return <AchievementsProvider>{children}</AchievementsProvider>;
+}
+
+function AccumulatorProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <AccumulatorProvider>{children}</AccumulatorProvider>;
 }
