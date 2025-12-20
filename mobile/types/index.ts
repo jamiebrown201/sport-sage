@@ -52,6 +52,13 @@ export interface Sport {
 
 export type EventStatus = 'scheduled' | 'live' | 'finished' | 'cancelled';
 
+export interface LiveScore {
+  home: number;
+  away: number;
+  time?: string; // e.g., "45'" for football, "2nd Quarter" for basketball
+  period?: string;
+}
+
 export interface Event {
   id: string;
   sport: Sport;
@@ -64,6 +71,7 @@ export interface Event {
   status: EventStatus;
   homeScore?: number;
   awayScore?: number;
+  liveScore?: LiveScore;
   markets: Market[];
   sponsoredEvent?: SponsoredEvent;
 }
@@ -395,6 +403,209 @@ export interface UserAchievement {
   isUnlocked: boolean;
   unlockedAt?: string;
   isClaimed: boolean;
+}
+
+// ============================================================================
+// FRIENDS
+// ============================================================================
+
+export type FriendStatus = 'pending' | 'accepted' | 'blocked';
+
+export interface Friend {
+  id: string;
+  userId: string;
+  friendId: string;
+  username: string;
+  avatarUrl?: string;
+  status: FriendStatus;
+  totalStarsEarned: number;
+  winRate: number;
+  currentStreak: number;
+  bestStreak?: number;
+  favoriteSport?: SportSlug;
+  isOnline?: boolean;
+  lastActive?: string;
+  addedAt: string;
+}
+
+export type FriendActivityType =
+  | 'prediction_placed'
+  | 'prediction_won'
+  | 'prediction_lost'
+  | 'accumulator_placed'
+  | 'accumulator_won'
+  | 'achievement_unlocked'
+  | 'streak_milestone';
+
+export interface FriendActivity {
+  id: string;
+  friendId: string;
+  friendUsername: string;
+  friendAvatarUrl?: string;
+  type: FriendActivityType;
+  description: string;
+  eventName?: string;
+  outcome?: string;
+  odds?: number;
+  coinsWon?: number;
+  starsEarned?: number;
+  achievementName?: string;
+  streakCount?: number;
+  createdAt: string;
+}
+
+export interface FriendPrediction {
+  id: string;
+  friendId: string;
+  friendUsername: string;
+  friendAvatarUrl?: string;
+  eventId: string;
+  event: Event;
+  outcome: Outcome;
+  stake: number;
+  placedAt: string;
+}
+
+// ============================================================================
+// STREAK SHIELDS
+// ============================================================================
+
+export interface StreakShield {
+  id: string;
+  name: string;
+  description: string;
+  gemPrice: number;
+  shieldsProvided: number;
+  iconName: string;
+}
+
+export const STREAK_SHIELDS: StreakShield[] = [
+  { id: 'shield_1', name: 'Single Shield', description: 'Protect your streak from 1 loss', gemPrice: 25, shieldsProvided: 1, iconName: 'shield' },
+  { id: 'shield_3', name: 'Triple Shield', description: 'Protect your streak from 3 losses', gemPrice: 60, shieldsProvided: 3, iconName: 'shield-star' },
+  { id: 'shield_7', name: 'Weekly Shield', description: 'Protect your streak for 7 losses', gemPrice: 120, shieldsProvided: 7, iconName: 'shield-crown' },
+];
+
+// ============================================================================
+// PREDICTION INSIGHTS
+// ============================================================================
+
+export interface SportInsight {
+  sportSlug: SportSlug;
+  sportName: string;
+  totalPredictions: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  profit: number;
+  avgOdds: number;
+  bestWin?: {
+    eventName: string;
+    odds: number;
+    coinsWon: number;
+  };
+}
+
+export interface PredictionInsights {
+  overallWinRate: number;
+  totalProfit: number;
+  avgOdds: number;
+  favoriteTime: string;
+  sportInsights: SportInsight[];
+  weeklyPerformance: {
+    week: string;
+    winRate: number;
+    predictions: number;
+  }[];
+}
+
+// ============================================================================
+// REFERRALS
+// ============================================================================
+
+export interface Referral {
+  id: string;
+  referrerId: string;
+  referredUserId: string;
+  referredUsername: string;
+  bonusCoins: number;
+  bonusStars: number;
+  status: 'pending' | 'completed';
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface ReferralStats {
+  totalReferrals: number;
+  pendingReferrals: number;
+  completedReferrals: number;
+  totalCoinsEarned: number;
+  totalStarsEarned: number;
+  referralCode: string;
+}
+
+export const REFERRAL_REWARDS = {
+  referrerCoins: 500,
+  referrerStars: 100,
+  referredCoins: 1000,
+  referredStars: 50,
+};
+
+// ============================================================================
+// SETTINGS
+// ============================================================================
+
+export interface UserSettings {
+  notifications: {
+    predictions: boolean;
+    challenges: boolean;
+    friends: boolean;
+    marketing: boolean;
+  };
+  appearance: {
+    theme: 'dark' | 'light' | 'system';
+  };
+  privacy: {
+    showOnLeaderboard: boolean;
+    showActivityToFriends: boolean;
+    allowFriendRequests: boolean;
+  };
+}
+
+export const DEFAULT_SETTINGS: UserSettings = {
+  notifications: {
+    predictions: true,
+    challenges: true,
+    friends: true,
+    marketing: false,
+  },
+  appearance: {
+    theme: 'dark',
+  },
+  privacy: {
+    showOnLeaderboard: true,
+    showActivityToFriends: true,
+    allowFriendRequests: true,
+  },
+};
+
+// ============================================================================
+// MARKET TYPES (Extended)
+// ============================================================================
+
+export type MarketType =
+  | 'match_winner'
+  | 'over_under'
+  | 'both_teams_score'
+  | 'handicap'
+  | 'correct_score'
+  | 'first_goalscorer';
+
+export interface ExtendedMarket {
+  id: string;
+  type: MarketType;
+  name: string;
+  line?: number; // For over/under and handicap
+  outcomes: Outcome[];
 }
 
 // ============================================================================

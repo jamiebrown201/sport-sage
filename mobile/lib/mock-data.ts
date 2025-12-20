@@ -12,6 +12,12 @@ import {
   UserChallengeProgress,
   Achievement,
   UserAchievement,
+  Friend,
+  FriendActivity,
+  FriendPrediction,
+  Referral,
+  ReferralStats,
+  PredictionInsights,
 } from "@/types";
 
 // ============================================================================
@@ -74,6 +80,32 @@ const daysFromNow = (days: number, hours: number = 18): string => {
 // ============================================================================
 
 export const EVENTS: Event[] = [
+  // Live event
+  {
+    id: "event_live_1",
+    sport: SPORTS[0],
+    competition: "Premier League",
+    homeTeam: "Manchester United",
+    awayTeam: "Tottenham",
+    startTime: today(12, 30),
+    status: "live",
+    liveScore: {
+      home: 2,
+      away: 1,
+      time: "67'",
+    },
+    markets: [
+      {
+        id: "market_live_1",
+        type: "match_winner",
+        outcomes: [
+          { id: "out_live_1a", name: "Manchester United", odds: 1.35 },
+          { id: "out_live_1b", name: "Draw", odds: 4.5 },
+          { id: "out_live_1c", name: "Tottenham", odds: 8.0 },
+        ],
+      },
+    ],
+  },
   // Today's events
   {
     id: "event_1",
@@ -1156,6 +1188,331 @@ export const USER_ACHIEVEMENTS: UserAchievement[] = [
   },
 ];
 
+// ============================================================================
+// FRIENDS
+// ============================================================================
+
+export const FRIENDS: Friend[] = [
+  {
+    id: 'friend_1',
+    userId: 'user_1',
+    friendId: 'user_top2',
+    username: 'SportsMaster99',
+    avatarUrl: 'https://i.pravatar.cc/150?u=sportsmaster99',
+    status: 'accepted',
+    totalStarsEarned: 42100,
+    winRate: 72,
+    currentStreak: 5,
+    bestStreak: 12,
+    favoriteSport: 'football',
+    isOnline: true,
+    addedAt: daysAgo(10),
+  },
+  {
+    id: 'friend_2',
+    userId: 'user_1',
+    friendId: 'user_top5',
+    username: 'TennisPro',
+    avatarUrl: 'https://i.pravatar.cc/150?u=tennispro',
+    status: 'accepted',
+    totalStarsEarned: 32800,
+    winRate: 65,
+    currentStreak: 2,
+    bestStreak: 8,
+    favoriteSport: 'tennis',
+    isOnline: false,
+    lastActive: daysAgo(0, 2),
+    addedAt: daysAgo(7),
+  },
+  {
+    id: 'friend_3',
+    userId: 'user_1',
+    friendId: 'user_top7',
+    username: 'OddsWizard',
+    avatarUrl: 'https://i.pravatar.cc/150?u=oddswizard',
+    status: 'accepted',
+    totalStarsEarned: 25200,
+    winRate: 68,
+    currentStreak: 8,
+    bestStreak: 15,
+    favoriteSport: 'darts',
+    isOnline: true,
+    addedAt: daysAgo(5),
+  },
+  {
+    id: 'friend_4',
+    userId: 'user_1',
+    friendId: 'user_43',
+    username: 'JustBehind',
+    avatarUrl: 'https://i.pravatar.cc/150?u=justbehind',
+    status: 'accepted',
+    totalStarsEarned: 8200,
+    winRate: 62,
+    currentStreak: 1,
+    bestStreak: 4,
+    favoriteSport: 'football',
+    isOnline: false,
+    lastActive: daysAgo(1),
+    addedAt: daysAgo(3),
+  },
+  {
+    id: 'friend_5',
+    userId: 'user_1',
+    friendId: 'user_new',
+    username: 'NewChallenger',
+    avatarUrl: 'https://i.pravatar.cc/150?u=newchallenger',
+    status: 'pending',
+    totalStarsEarned: 1500,
+    winRate: 55,
+    currentStreak: 0,
+    addedAt: today(10),
+  },
+];
+
+export const FRIEND_ACTIVITY: FriendActivity[] = [
+  {
+    id: 'activity_1',
+    friendId: 'user_top2',
+    friendUsername: 'SportsMaster99',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=sportsmaster99',
+    type: 'prediction_won',
+    description: 'won their prediction',
+    eventName: 'Man City vs Liverpool',
+    outcome: 'Draw',
+    odds: 3.6,
+    coinsWon: 540,
+    starsEarned: 390,
+    createdAt: today(12, 30),
+  },
+  {
+    id: 'activity_2',
+    friendId: 'user_top7',
+    friendUsername: 'OddsWizard',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=oddswizard',
+    type: 'streak_milestone',
+    description: 'reached an 8-win streak!',
+    streakCount: 8,
+    createdAt: today(11, 15),
+  },
+  {
+    id: 'activity_3',
+    friendId: 'user_top5',
+    friendUsername: 'TennisPro',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=tennispro',
+    type: 'accumulator_placed',
+    description: 'placed a 4-fold accumulator',
+    odds: 12.5,
+    createdAt: today(10, 45),
+  },
+  {
+    id: 'activity_4',
+    friendId: 'user_top2',
+    friendUsername: 'SportsMaster99',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=sportsmaster99',
+    type: 'prediction_placed',
+    description: 'placed a prediction',
+    eventName: 'Arsenal vs Chelsea',
+    outcome: 'Arsenal',
+    odds: 2.1,
+    createdAt: today(9, 30),
+  },
+  {
+    id: 'activity_5',
+    friendId: 'user_43',
+    friendUsername: 'JustBehind',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=justbehind',
+    type: 'achievement_unlocked',
+    description: 'unlocked an achievement',
+    achievementName: 'Hot Streak',
+    createdAt: yesterday(18, 0),
+  },
+  {
+    id: 'activity_6',
+    friendId: 'user_top7',
+    friendUsername: 'OddsWizard',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=oddswizard',
+    type: 'prediction_won',
+    description: 'won their prediction',
+    eventName: 'Luke Littler vs Michael Smith',
+    outcome: 'Luke Littler',
+    odds: 1.55,
+    coinsWon: 310,
+    starsEarned: 110,
+    createdAt: yesterday(14, 0),
+  },
+];
+
+export const FRIEND_PREDICTIONS: FriendPrediction[] = [
+  {
+    id: 'fpred_1',
+    friendId: 'user_top2',
+    friendUsername: 'SportsMaster99',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=sportsmaster99',
+    eventId: 'event_2',
+    event: EVENTS[2], // Arsenal vs Chelsea (index shifted due to live event)
+    outcome: { id: 'out_2a', name: 'Arsenal', odds: 2.1 },
+    stake: 250,
+    placedAt: today(9, 30),
+  },
+  {
+    id: 'fpred_2',
+    friendId: 'user_top5',
+    friendUsername: 'TennisPro',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=tennispro',
+    eventId: 'event_3',
+    event: EVENTS[3],
+    outcome: { id: 'out_3a', name: 'Novak Djokovic', odds: 1.75 },
+    stake: 300,
+    placedAt: today(10, 0),
+  },
+  {
+    id: 'fpred_3',
+    friendId: 'user_top7',
+    friendUsername: 'OddsWizard',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=oddswizard',
+    eventId: 'event_4',
+    event: EVENTS[4],
+    outcome: { id: 'out_4a', name: 'Luke Littler', odds: 1.55 },
+    stake: 200,
+    placedAt: today(11, 0),
+  },
+  {
+    id: 'fpred_4',
+    friendId: 'user_43',
+    friendUsername: 'JustBehind',
+    friendAvatarUrl: 'https://i.pravatar.cc/150?u=justbehind',
+    eventId: 'event_1',
+    event: EVENTS[1],
+    outcome: { id: 'out_1c', name: 'Liverpool', odds: 3.8 },
+    stake: 100,
+    placedAt: today(8, 0),
+  },
+];
+
+// ============================================================================
+// REFERRALS
+// ============================================================================
+
+export const REFERRALS: Referral[] = [
+  {
+    id: 'ref_1',
+    referrerId: 'user_1',
+    referredUserId: 'user_ref1',
+    referredUsername: 'MyMate123',
+    bonusCoins: 500,
+    bonusStars: 100,
+    status: 'completed',
+    createdAt: daysAgo(5),
+    completedAt: daysAgo(4),
+  },
+  {
+    id: 'ref_2',
+    referrerId: 'user_1',
+    referredUserId: 'user_ref2',
+    referredUsername: 'FootyFriend',
+    bonusCoins: 500,
+    bonusStars: 100,
+    status: 'pending',
+    createdAt: daysAgo(1),
+  },
+];
+
+export const REFERRAL_STATS: ReferralStats = {
+  totalReferrals: 2,
+  pendingReferrals: 1,
+  completedReferrals: 1,
+  totalCoinsEarned: 500,
+  totalStarsEarned: 100,
+  referralCode: 'SAGE-FAN123',
+};
+
+// ============================================================================
+// PREDICTION INSIGHTS
+// ============================================================================
+
+export const PREDICTION_INSIGHTS: PredictionInsights = {
+  overallWinRate: 66.67,
+  totalProfit: 850,
+  avgOdds: 2.35,
+  favoriteTime: 'Evening (7-9pm)',
+  sportInsights: [
+    {
+      sportSlug: 'football',
+      sportName: 'Football',
+      totalPredictions: 6,
+      wins: 4,
+      losses: 2,
+      winRate: 66.67,
+      profit: 420,
+      avgOdds: 2.5,
+      bestWin: {
+        eventName: 'Brighton vs Man United',
+        odds: 4.5,
+        coinsWon: 450,
+      },
+    },
+    {
+      sportSlug: 'tennis',
+      sportName: 'Tennis',
+      totalPredictions: 3,
+      wins: 2,
+      losses: 1,
+      winRate: 66.67,
+      profit: 220,
+      avgOdds: 1.9,
+    },
+    {
+      sportSlug: 'darts',
+      sportName: 'Darts',
+      totalPredictions: 2,
+      wins: 1,
+      losses: 1,
+      winRate: 50,
+      profit: 65,
+      avgOdds: 1.65,
+    },
+    {
+      sportSlug: 'basketball',
+      sportName: 'Basketball',
+      totalPredictions: 1,
+      wins: 1,
+      losses: 0,
+      winRate: 100,
+      profit: 145,
+      avgOdds: 1.85,
+    },
+  ],
+  weeklyPerformance: [
+    { week: 'This Week', winRate: 75, predictions: 4 },
+    { week: 'Last Week', winRate: 60, predictions: 5 },
+    { week: '2 Weeks Ago', winRate: 66, predictions: 3 },
+  ],
+};
+
+// ============================================================================
+// EXTENDED MARKETS (for events)
+// ============================================================================
+
+export function getExtendedMarketsForEvent(eventId: string): {
+  overUnder?: { line: number; over: number; under: number };
+  btts?: { yes: number; no: number };
+  handicap?: { line: number; home: number; away: number };
+} | null {
+  // Only football events get extended markets
+  const event = getEventById(eventId);
+  if (!event || event.sport.slug !== 'football') return null;
+
+  return {
+    overUnder: { line: 2.5, over: 1.85, under: 1.95 },
+    btts: { yes: 1.75, no: 2.05 },
+    handicap: { line: -1, home: 2.4, away: 1.55 },
+  };
+}
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
 // Aliases for store.tsx
 export const mockUser = CURRENT_USER;
 export const mockUserStats = CURRENT_USER_STATS;
@@ -1163,3 +1520,9 @@ export const mockPredictions = PREDICTIONS;
 export const mockTransactions = TRANSACTIONS;
 export const mockChallenges = USER_CHALLENGE_PROGRESS;
 export const mockAchievements = USER_ACHIEVEMENTS;
+export const mockFriends = FRIENDS;
+export const mockFriendActivity = FRIEND_ACTIVITY;
+export const mockFriendPredictions = FRIEND_PREDICTIONS;
+export const mockReferrals = REFERRALS;
+export const mockReferralStats = REFERRAL_STATS;
+export const mockPredictionInsights = PREDICTION_INSIGHTS;

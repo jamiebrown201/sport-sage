@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
 import { Link, router } from 'expo-router';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
-import { useAuth, usePredictions, useChallenges } from '@/lib/store';
+import { useAuth, usePredictions, useChallenges, useFriends } from '@/lib/store';
 import { EVENTS, canClaimTopup } from '@/lib/mock-data';
 import { Card, Button, Badge } from '@/components/ui';
 import { EventCard } from '@/components/EventCard';
@@ -11,19 +11,53 @@ import { PredictionCard } from '@/components/PredictionCard';
 import { StreakIndicator } from '@/components/StreakIndicator';
 import { DailyChallengeCard } from '@/components/DailyChallengeCard';
 import { CoinBurst } from '@/components/animations';
-import { GiftIcon, AlertIcon, FireIcon } from '@/components/icons';
+import { GiftIcon, AlertIcon, FireIcon, UsersIcon, StarIcon, TrophyIcon } from '@/components/icons';
+import { FriendActivity } from '@/types';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
+
+// Helper to format time ago
+function formatTimeAgo(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'Yesterday';
+  return `${diffDays}d ago`;
+}
+
+// Get activity icon based on type
+function getActivityIcon(type: FriendActivity['type']): React.ReactElement {
+  switch (type) {
+    case 'prediction_won':
+    case 'accumulator_won':
+      return <StarIcon size={12} color={colors.success} />;
+    case 'streak_milestone':
+      return <FireIcon size={12} color={colors.warning} />;
+    case 'achievement_unlocked':
+      return <TrophyIcon size={12} color={colors.gems} />;
+    default:
+      return <UsersIcon size={12} color={colors.primary} />;
+  }
+}
 
 export default function HomeScreen(): React.ReactElement {
   const { user, stats, updateUser, updateStats } = useAuth();
   const { getPendingPredictions } = usePredictions();
   const { getActiveChallenges, claimChallenge } = useChallenges();
+  const { friendActivity } = useFriends();
   const [showCoinBurst, setShowCoinBurst] = useState(false);
 
   const pendingPredictions = getPendingPredictions().slice(0, 2);
   const upcomingEvents = EVENTS.slice(0, 4);
   const activeChallenges = getActiveChallenges().slice(0, 3);
+  const recentFriendActivity = friendActivity.slice(0, 4);
   const canTopup = user && stats ? canClaimTopup(user.coins, stats.lastTopupDate) : false;
 
   // Check if user is low on coins (for rescue prompt)
@@ -221,18 +255,77 @@ export default function HomeScreen(): React.ReactElement {
         </MotiView>
       )}
 
-      {/* Active Predictions */}
-      {pendingPredictions.length > 0 && (
+      {/* Friend Activity */}
+      {recentFriendActivity.length > 0 && (
         <MotiView
           from={{ opacity: 0, translateY: 10 }}
           animate={{ opacity: 1, translateY: 0 }}
           transition={{ type: 'timing', duration: 400, delay: 400 }}
         >
           <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <UsersIcon size={20} color={colors.primary} />
+              <Text style={styles.sectionTitle}>Friend Activity</Text>
+            </View>
+            <Link href="/(tabs)/leaderboard" asChild>
+              <Pressable>
+                <Text style={styles.seeAll}>See All</Text>
+              </Pressable>
+            </Link>
+          </View>
+
+          <Card style={styles.activityCard}>
+            {recentFriendActivity.map((activity, index) => (
+              <View
+                key={activity.id}
+                style={[
+                  styles.activityItem,
+                  index < recentFriendActivity.length - 1 && styles.activityItemBorder,
+                ]}
+              >
+                {activity.friendAvatarUrl ? (
+                  <Image
+                    source={{ uri: activity.friendAvatarUrl }}
+                    style={styles.activityAvatar}
+                  />
+                ) : (
+                  <View style={[styles.activityAvatar, styles.activityAvatarFallback]}>
+                    <Text style={styles.activityAvatarText}>
+                      {activity.friendUsername.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.activityContent}>
+                  <View style={styles.activityHeader}>
+                    <Text style={styles.activityUsername}>{activity.friendUsername}</Text>
+                    <View style={styles.activityBadge}>
+                      {getActivityIcon(activity.type)}
+                    </View>
+                  </View>
+                  <Text style={styles.activityText} numberOfLines={1}>
+                    {activity.description}
+                    {activity.eventName && ` on ${activity.eventName}`}
+                  </Text>
+                </View>
+                <Text style={styles.activityTime}>{formatTimeAgo(activity.createdAt)}</Text>
+              </View>
+            ))}
+          </Card>
+        </MotiView>
+      )}
+
+      {/* Active Predictions */}
+      {pendingPredictions.length > 0 && (
+        <MotiView
+          from={{ opacity: 0, translateY: 10 }}
+          animate={{ opacity: 1, translateY: 0 }}
+          transition={{ type: 'timing', duration: 400, delay: 450 }}
+        >
+          <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Active Predictions</Text>
             <Link href="/(tabs)/predictions" asChild>
               <Pressable>
-                <Text style={styles.seeAll}>See All →</Text>
+                <Text style={styles.seeAll}>See All</Text>
               </Pressable>
             </Link>
           </View>
@@ -386,5 +479,64 @@ const styles = StyleSheet.create({
     fontSize: layout.fontSize.sm,
     color: colors.primary,
     fontWeight: layout.fontWeight.medium,
+  },
+  activityCard: {
+    marginBottom: layout.spacing.lg,
+    padding: 0,
+  },
+  activityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: layout.spacing.md,
+    gap: layout.spacing.sm,
+  },
+  activityItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  activityAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  activityAvatarFallback: {
+    backgroundColor: colors.primaryDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityAvatarText: {
+    fontSize: layout.fontSize.md,
+    fontWeight: layout.fontWeight.bold,
+    color: colors.primary,
+  },
+  activityContent: {
+    flex: 1,
+  },
+  activityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: layout.spacing.xs,
+  },
+  activityUsername: {
+    fontSize: layout.fontSize.sm,
+    fontWeight: layout.fontWeight.semibold,
+    color: colors.textPrimary,
+  },
+  activityBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.cardElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityText: {
+    fontSize: layout.fontSize.xs,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  activityTime: {
+    fontSize: layout.fontSize.xs,
+    color: colors.textMuted,
   },
 });

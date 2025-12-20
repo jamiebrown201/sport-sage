@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import { getEventById, getEventTitle } from '@/lib/mock-data';
-import { useAuth, useWallet, usePredictions, useAccumulator } from '@/lib/store';
+import { useAuth, useWallet, usePredictions, useAccumulator, useFriends } from '@/lib/store';
 import { Outcome, Prediction, Event, ACCUMULATOR_LIMITS } from '@/types';
 import { Card, Badge, Button } from '@/components/ui';
 import { PredictionSlip } from '@/components/PredictionSlip';
@@ -25,6 +25,8 @@ import {
   CheckIcon,
   LayersIcon,
   PlusIcon,
+  UsersIcon,
+  LiveIcon,
 } from '@/components/icons';
 import { colors, getOddsColor } from '@/constants/colors';
 import { layout } from '@/constants/layout';
@@ -57,6 +59,7 @@ export default function EventDetailScreen(): React.ReactElement {
   const event = id ? getEventById(id) : undefined;
   const { user, updateUser, updateStats, stats } = useAuth();
   const { addPrediction } = usePredictions();
+  const { getFriendPredictionsForEvent } = useFriends();
   const {
     addSelection,
     removeSelection,
@@ -64,6 +67,9 @@ export default function EventDetailScreen(): React.ReactElement {
     getSelectedOutcome,
     currentSelections,
   } = useAccumulator();
+
+  // Get friend predictions for this event
+  const friendPredictions = id ? getFriendPredictionsForEvent(id) : [];
 
   const [selectedOutcome, setSelectedOutcome] = useState<Outcome | null>(null);
   const [isPlacing, setIsPlacing] = useState(false);
@@ -195,6 +201,24 @@ export default function EventDetailScreen(): React.ReactElement {
 
           <Text style={styles.title}>{title}</Text>
 
+          {/* Live Score */}
+          {event.status === 'live' && event.liveScore && (
+            <View style={styles.liveScoreContainer}>
+              <View style={styles.liveIndicator}>
+                <LiveIcon size={12} color={colors.error} />
+                <Text style={styles.liveText}>LIVE</Text>
+              </View>
+              <View style={styles.liveScoreRow}>
+                <Text style={styles.liveScore}>{event.liveScore.home}</Text>
+                <Text style={styles.liveScoreSeparator}>-</Text>
+                <Text style={styles.liveScore}>{event.liveScore.away}</Text>
+              </View>
+              {event.liveScore.time && (
+                <Text style={styles.liveTime}>{event.liveScore.time}</Text>
+              )}
+            </View>
+          )}
+
           {event.sponsoredEvent && (
             <Badge
               text={`${event.sponsoredEvent.title}`}
@@ -203,6 +227,48 @@ export default function EventDetailScreen(): React.ReactElement {
             />
           )}
         </MotiView>
+
+        {/* Friend Predictions */}
+        {friendPredictions.length > 0 && (
+          <MotiView
+            from={{ opacity: 0, translateY: 10 }}
+            animate={{ opacity: 1, translateY: 0 }}
+            transition={{ type: 'timing', duration: 300, delay: 50 }}
+          >
+            <View style={styles.friendPredictionsSection}>
+              <View style={styles.friendPredictionsHeader}>
+                <UsersIcon size={18} color={colors.primary} />
+                <Text style={styles.friendPredictionsTitle}>
+                  {friendPredictions.length} Friend{friendPredictions.length > 1 ? 's' : ''} Betting
+                </Text>
+              </View>
+              {friendPredictions.map((fp) => (
+                <View key={fp.id} style={styles.friendPredictionItem}>
+                  {fp.friendAvatarUrl ? (
+                    <Image source={{ uri: fp.friendAvatarUrl }} style={styles.friendAvatar} />
+                  ) : (
+                    <View style={[styles.friendAvatar, styles.friendAvatarFallback]}>
+                      <Text style={styles.friendAvatarText}>
+                        {fp.friendUsername.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.friendPredictionInfo}>
+                    <Text style={styles.friendName}>{fp.friendUsername}</Text>
+                    <Text style={styles.friendPick}>
+                      Picked <Text style={styles.friendPickHighlight}>{fp.outcome.name}</Text>
+                    </Text>
+                  </View>
+                  <View style={styles.friendOdds}>
+                    <Text style={[styles.friendOddsValue, { color: getOddsColor(fp.outcome.odds) }]}>
+                      {fp.outcome.odds.toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </MotiView>
+        )}
 
         {/* Market */}
         {market && (
@@ -391,6 +457,122 @@ const styles = StyleSheet.create({
   },
   sponsorBadge: {
     marginBottom: layout.spacing.lg,
+  },
+  liveScoreContainer: {
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    padding: layout.spacing.lg,
+    borderRadius: layout.borderRadius.lg,
+    marginBottom: layout.spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.error,
+  },
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    paddingHorizontal: layout.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: layout.borderRadius.sm,
+    marginBottom: layout.spacing.sm,
+  },
+  liveText: {
+    fontSize: layout.fontSize.xs,
+    fontWeight: layout.fontWeight.bold,
+    color: colors.error,
+    letterSpacing: 0.5,
+  },
+  liveScoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: layout.spacing.md,
+  },
+  liveScore: {
+    fontSize: 48,
+    fontWeight: layout.fontWeight.bold,
+    color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  liveScoreSeparator: {
+    fontSize: 32,
+    color: colors.textMuted,
+  },
+  liveTime: {
+    fontSize: layout.fontSize.md,
+    color: colors.error,
+    fontWeight: layout.fontWeight.semibold,
+    marginTop: layout.spacing.sm,
+  },
+  friendPredictionsSection: {
+    backgroundColor: colors.card,
+    padding: layout.spacing.md,
+    borderRadius: layout.borderRadius.lg,
+    marginBottom: layout.spacing.lg,
+  },
+  friendPredictionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: layout.spacing.sm,
+    marginBottom: layout.spacing.md,
+  },
+  friendPredictionsTitle: {
+    fontSize: layout.fontSize.md,
+    fontWeight: layout.fontWeight.bold,
+    color: colors.primary,
+  },
+  friendPredictionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: layout.spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  friendAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primaryDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: layout.spacing.sm,
+  },
+  friendAvatarText: {
+    fontSize: layout.fontSize.md,
+    fontWeight: layout.fontWeight.bold,
+    color: colors.primary,
+  },
+  friendAvatarFallback: {
+    backgroundColor: colors.primaryDim,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  friendPredictionInfo: {
+    flex: 1,
+  },
+  friendName: {
+    fontSize: layout.fontSize.sm,
+    fontWeight: layout.fontWeight.semibold,
+    color: colors.textPrimary,
+  },
+  friendPick: {
+    fontSize: layout.fontSize.xs,
+    color: colors.textSecondary,
+  },
+  friendPickHighlight: {
+    color: colors.textPrimary,
+    fontWeight: layout.fontWeight.medium,
+  },
+  friendOdds: {
+    backgroundColor: colors.cardElevated,
+    paddingHorizontal: layout.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: layout.borderRadius.sm,
+  },
+  friendOddsValue: {
+    fontSize: layout.fontSize.sm,
+    fontWeight: layout.fontWeight.bold,
+    fontVariant: ['tabular-nums'],
   },
   sectionTitle: {
     fontSize: layout.fontSize.lg,

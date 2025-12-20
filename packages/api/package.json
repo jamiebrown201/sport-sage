@@ -1,0 +1,30 @@
+{
+  "name": "@sport-sage/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sport-sage/database": "workspace:*",
+    "@sport-sage/shared": "workspace:*",
+    "@aws-sdk/client-cognito-identity-provider": "^3.700.0",
+    "@aws-sdk/client-sqs": "^3.700.0",
+    "drizzle-orm": "^0.38.2",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "sport-sage",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @sport-sage/database generate",
+    "db:migrate": "pnpm --filter @sport-sage/database migrate",
+    "db:push": "pnpm --filter @sport-sage/database push",
+    "db:studio": "pnpm --filter @sport-sage/database studio",
+    "cdk:deploy": "pnpm --filter @sport-sage/infra deploy",
+    "cdk:synth": "pnpm --filter @sport-sage/infra synth"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.9.2"
+  }
+}

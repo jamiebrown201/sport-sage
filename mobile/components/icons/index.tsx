@@ -451,3 +451,167 @@ export function ChevronDownIcon({ size = 24, color = colors.textPrimary }: IconP
     </Svg>
   );
 }
+
+// Social Icons
+export function UsersIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="9" cy="7" r="3" stroke={color} strokeWidth="2" />
+      <Path
+        d="M15 21c0-3-2.5-5-6-5s-6 2-6 5"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <Circle cx="17" cy="7" r="2" stroke={color} strokeWidth="2" />
+      <Path
+        d="M21 21c0-2-1.5-3.5-4-4"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+export function GlobeIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth="2" />
+      <Path
+        d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function SearchIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="11" cy="11" r="8" stroke={color} strokeWidth="2" />
+      <Path
+        d="M21 21l-4.35-4.35"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function ShareIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="18" cy="5" r="3" stroke={color} strokeWidth="2" />
+      <Circle cx="6" cy="12" r="3" stroke={color} strokeWidth="2" />
+      <Circle cx="18" cy="19" r="3" stroke={color} strokeWidth="2" />
+      <Path
+        d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+export function ShieldIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+        fill={color}
+        fillOpacity="0.2"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function RefreshIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M1 4v6h6M23 20v-6h-6"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function FilterIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function BellIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M13.73 21a2 2 0 01-3.46 0"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function ChartIcon({ size = 24, color = colors.textPrimary }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M18 20V10M12 20V4M6 20v-6"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function LiveIcon({ size = 24, color = colors.error }: IconProps): React.ReactElement {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="4" fill={color} />
+      <Circle cx="12" cy="12" r="8" stroke={color} strokeWidth="2" strokeOpacity="0.5" />
+      <Circle cx="12" cy="12" r="11" stroke={color} strokeWidth="1" strokeOpacity="0.3" />
+    </Svg>
+  );
+}

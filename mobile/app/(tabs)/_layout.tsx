@@ -122,6 +122,13 @@ export default function TabsLayout(): React.ReactElement {
           tabBarIcon: ({ focused }) => <TabIcon icon={UserIcon} focused={focused} />,
         }}
       />
+      {/* Hide settings from tab bar - accessed via profile */}
+      <Tabs.Screen
+        name="settings"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

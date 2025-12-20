@@ -14,6 +14,14 @@ import {
   Event,
   Outcome,
   ACCUMULATOR_LIMITS,
+  Friend,
+  FriendActivity,
+  FriendPrediction,
+  UserSettings,
+  DEFAULT_SETTINGS,
+  PredictionInsights,
+  ReferralStats,
+  Referral,
 } from '@/types';
 import {
   mockUser,
@@ -22,6 +30,12 @@ import {
   mockTransactions,
   mockChallenges,
   mockAchievements,
+  mockFriends,
+  mockFriendActivity,
+  mockFriendPredictions,
+  mockPredictionInsights,
+  mockReferralStats,
+  mockReferrals,
 } from './mock-data';
 
 // ============================================================================
@@ -40,6 +54,10 @@ const STORAGE_KEYS = {
   ACCUMULATORS: '@sport_sage_accumulators',
   CURRENT_ACCA: '@sport_sage_current_acca',
   ONBOARDING_COMPLETE: '@sport_sage_onboarding',
+  FRIENDS: '@sport_sage_friends',
+  SETTINGS: '@sport_sage_settings',
+  STREAK_SHIELDS: '@sport_sage_streak_shields',
+  REFERRALS: '@sport_sage_referrals',
 };
 
 interface AuthProviderProps {
@@ -914,6 +932,470 @@ export function useAccumulator(): AccumulatorContextType {
 }
 
 // ============================================================================
+// FRIENDS CONTEXT
+// ============================================================================
+
+interface FriendsContextType {
+  friends: Friend[];
+  friendActivity: FriendActivity[];
+  friendPredictions: FriendPrediction[];
+  pendingRequests: Friend[];
+  addFriend: (username: string) => boolean;
+  acceptFriend: (friendId: string) => void;
+  removeFriend: (friendId: string) => void;
+  blockFriend: (friendId: string) => void;
+  getFriendLeaderboard: () => Friend[];
+  getFriendPredictionsForEvent: (eventId: string) => FriendPrediction[];
+  isFriend: (userId: string) => boolean;
+}
+
+const FriendsContext = createContext<FriendsContextType | null>(null);
+
+interface FriendsProviderProps {
+  children: React.ReactNode;
+}
+
+export function FriendsProvider({ children }: FriendsProviderProps): React.ReactElement {
+  const [friends, setFriends] = useState<Friend[]>(mockFriends);
+  const [friendActivity] = useState<FriendActivity[]>(mockFriendActivity);
+  const [friendPredictions] = useState<FriendPrediction[]>(mockFriendPredictions);
+
+  useEffect(() => {
+    loadFriends();
+  }, []);
+
+  const loadFriends = async (): Promise<void> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.FRIENDS);
+      if (stored) {
+        setFriends(JSON.parse(stored));
+      }
+    } catch (error) {
+      console.error('Failed to load friends:', error);
+    }
+  };
+
+  const saveFriends = async (data: Friend[]): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.FRIENDS, JSON.stringify(data));
+    } catch (error) {
+      console.error('Failed to save friends:', error);
+    }
+  };
+
+  const pendingRequests = friends.filter(f => f.status === 'pending');
+
+  const addFriend = useCallback((username: string): boolean => {
+    // Check if already friends or pending
+    if (friends.some(f => f.username.toLowerCase() === username.toLowerCase())) {
+      return false;
+    }
+
+    const newFriend: Friend = {
+      id: `friend_${Date.now()}`,
+      userId: 'user_1',
+      friendId: `user_${Date.now()}`,
+      username,
+      status: 'pending',
+      totalStarsEarned: 0,
+      winRate: 0,
+      currentStreak: 0,
+      addedAt: new Date().toISOString(),
+    };
+
+    setFriends(prev => {
+      const updated = [...prev, newFriend];
+      saveFriends(updated);
+      return updated;
+    });
+
+    return true;
+  }, [friends]);
+
+  const acceptFriend = useCallback((friendId: string): void => {
+    setFriends(prev => {
+      const updated = prev.map(f =>
+        f.id === friendId ? { ...f, status: 'accepted' as const } : f
+      );
+      saveFriends(updated);
+      return updated;
+    });
+  }, []);
+
+  const removeFriend = useCallback((friendId: string): void => {
+    setFriends(prev => {
+      const updated = prev.filter(f => f.id !== friendId);
+      saveFriends(updated);
+      return updated;
+    });
+  }, []);
+
+  const blockFriend = useCallback((friendId: string): void => {
+    setFriends(prev => {
+      const updated = prev.map(f =>
+        f.id === friendId ? { ...f, status: 'blocked' as const } : f
+      );
+      saveFriends(updated);
+      return updated;
+    });
+  }, []);
+
+  const getFriendLeaderboard = useCallback((): Friend[] => {
+    return friends
+      .filter(f => f.status === 'accepted')
+      .sort((a, b) => b.totalStarsEarned - a.totalStarsEarned);
+  }, [friends]);
+
+  const getFriendPredictionsForEvent = useCallback((eventId: string): FriendPrediction[] => {
+    return friendPredictions.filter(fp => fp.eventId === eventId);
+  }, [friendPredictions]);
+
+  const isFriend = useCallback((userId: string): boolean => {
+    return friends.some(f => f.friendId === userId && f.status === 'accepted');
+  }, [friends]);
+
+  const value: FriendsContextType = {
+    friends,
+    friendActivity,
+    friendPredictions,
+    pendingRequests,
+    addFriend,
+    acceptFriend,
+    removeFriend,
+    blockFriend,
+    getFriendLeaderboard,
+    getFriendPredictionsForEvent,
+    isFriend,
+  };
+
+  return (
+    <FriendsContext.Provider value={value}>
+      {children}
+    </FriendsContext.Provider>
+  );
+}
+
+export function useFriends(): FriendsContextType {
+  const context = useContext(FriendsContext);
+  if (!context) {
+    throw new Error('useFriends must be used within a FriendsProvider');
+  }
+  return context;
+}
+
+// ============================================================================
+// SETTINGS CONTEXT
+// ============================================================================
+
+interface SettingsContextType {
+  settings: UserSettings;
+  updateSettings: (updates: Partial<UserSettings>) => void;
+  updateNotifications: (updates: Partial<UserSettings['notifications']>) => void;
+  updatePrivacy: (updates: Partial<UserSettings['privacy']>) => void;
+  resetSettings: () => void;
+}
+
+const SettingsContext = createContext<SettingsContextType | null>(null);
+
+interface SettingsProviderProps {
+  children: React.ReactNode;
+}
+
+export function SettingsProvider({ children }: SettingsProviderProps): React.ReactElement {
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async (): Promise<void> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.SETTINGS);
+      if (stored) {
+        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(stored) });
+      }
+    } catch (error) {
+      console.error('Failed to load settings:', error);
+    }
+  };
+
+  const saveSettings = async (data: UserSettings): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data));
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+    }
+  };
+
+  const updateSettings = useCallback((updates: Partial<UserSettings>): void => {
+    setSettings(prev => {
+      const updated = { ...prev, ...updates };
+      saveSettings(updated);
+      return updated;
+    });
+  }, []);
+
+  const updateNotifications = useCallback((updates: Partial<UserSettings['notifications']>): void => {
+    setSettings(prev => {
+      const updated = {
+        ...prev,
+        notifications: { ...prev.notifications, ...updates },
+      };
+      saveSettings(updated);
+      return updated;
+    });
+  }, []);
+
+  const updatePrivacy = useCallback((updates: Partial<UserSettings['privacy']>): void => {
+    setSettings(prev => {
+      const updated = {
+        ...prev,
+        privacy: { ...prev.privacy, ...updates },
+      };
+      saveSettings(updated);
+      return updated;
+    });
+  }, []);
+
+  const resetSettings = useCallback((): void => {
+    setSettings(DEFAULT_SETTINGS);
+    saveSettings(DEFAULT_SETTINGS);
+  }, []);
+
+  const value: SettingsContextType = {
+    settings,
+    updateSettings,
+    updateNotifications,
+    updatePrivacy,
+    resetSettings,
+  };
+
+  return (
+    <SettingsContext.Provider value={value}>
+      {children}
+    </SettingsContext.Provider>
+  );
+}
+
+export function useSettings(): SettingsContextType {
+  const context = useContext(SettingsContext);
+  if (!context) {
+    throw new Error('useSettings must be used within a SettingsProvider');
+  }
+  return context;
+}
+
+// ============================================================================
+// STREAK SHIELDS CONTEXT
+// ============================================================================
+
+interface StreakShieldsContextType {
+  activeShields: number;
+  purchaseShield: (shieldId: string) => boolean;
+  useShield: () => boolean;
+  hasShield: boolean;
+}
+
+const StreakShieldsContext = createContext<StreakShieldsContextType | null>(null);
+
+interface StreakShieldsProviderProps {
+  children: React.ReactNode;
+}
+
+export function StreakShieldsProvider({ children }: StreakShieldsProviderProps): React.ReactElement {
+  const [activeShields, setActiveShields] = useState(0);
+  const { user, updateUser } = useAuth();
+
+  useEffect(() => {
+    loadShields();
+  }, []);
+
+  const loadShields = async (): Promise<void> => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEYS.STREAK_SHIELDS);
+      if (stored) {
+        setActiveShields(parseInt(stored, 10));
+      }
+    } catch (error) {
+      console.error('Failed to load shields:', error);
+    }
+  };
+
+  const saveShields = async (count: number): Promise<void> => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.STREAK_SHIELDS, count.toString());
+    } catch (error) {
+      console.error('Failed to save shields:', error);
+    }
+  };
+
+  const purchaseShield = useCallback((shieldId: string): boolean => {
+    if (!user) return false;
+
+    // Find shield price from types
+    const prices: Record<string, { gems: number; shields: number }> = {
+      'shield_1': { gems: 25, shields: 1 },
+      'shield_3': { gems: 60, shields: 3 },
+      'shield_7': { gems: 120, shields: 7 },
+    };
+
+    const shield = prices[shieldId];
+    if (!shield) return false;
+    if (user.gems < shield.gems) return false;
+
+    // Deduct gems
+    updateUser({ gems: user.gems - shield.gems });
+
+    // Add shields
+    setActiveShields(prev => {
+      const updated = prev + shield.shields;
+      saveShields(updated);
+      return updated;
+    });
+
+    return true;
+  }, [user, updateUser]);
+
+  const useShield = useCallback((): boolean => {
+    if (activeShields <= 0) return false;
+
+    setActiveShields(prev => {
+      const updated = prev - 1;
+      saveShields(updated);
+      return updated;
+    });
+
+    return true;
+  }, [activeShields]);
+
+  const value: StreakShieldsContextType = {
+    activeShields,
+    purchaseShield,
+    useShield,
+    hasShield: activeShields > 0,
+  };
+
+  return (
+    <StreakShieldsContext.Provider value={value}>
+      {children}
+    </StreakShieldsContext.Provider>
+  );
+}
+
+export function useStreakShields(): StreakShieldsContextType {
+  const context = useContext(StreakShieldsContext);
+  if (!context) {
+    throw new Error('useStreakShields must be used within a StreakShieldsProvider');
+  }
+  return context;
+}
+
+// ============================================================================
+// INSIGHTS CONTEXT
+// ============================================================================
+
+interface InsightsContextType {
+  insights: PredictionInsights;
+  refreshInsights: () => void;
+}
+
+const InsightsContext = createContext<InsightsContextType | null>(null);
+
+interface InsightsProviderProps {
+  children: React.ReactNode;
+}
+
+export function InsightsProvider({ children }: InsightsProviderProps): React.ReactElement {
+  const [insights] = useState<PredictionInsights>(mockPredictionInsights);
+
+  const refreshInsights = useCallback((): void => {
+    // In production, this would recalculate from predictions
+    console.log('Refreshing insights...');
+  }, []);
+
+  const value: InsightsContextType = {
+    insights,
+    refreshInsights,
+  };
+
+  return (
+    <InsightsContext.Provider value={value}>
+      {children}
+    </InsightsContext.Provider>
+  );
+}
+
+export function useInsights(): InsightsContextType {
+  const context = useContext(InsightsContext);
+  if (!context) {
+    throw new Error('useInsights must be used within an InsightsProvider');
+  }
+  return context;
+}
+
+// ============================================================================
+// REFERRALS CONTEXT
+// ============================================================================
+
+interface ReferralsContextType {
+  referrals: Referral[];
+  stats: ReferralStats;
+  shareReferralCode: () => void;
+  applyReferralCode: (code: string) => boolean;
+}
+
+const ReferralsContext = createContext<ReferralsContextType | null>(null);
+
+interface ReferralsProviderProps {
+  children: React.ReactNode;
+}
+
+export function ReferralsProvider({ children }: ReferralsProviderProps): React.ReactElement {
+  const [referrals] = useState<Referral[]>(mockReferrals);
+  const [stats] = useState<ReferralStats>(mockReferralStats);
+  const { user, updateUser } = useAuth();
+
+  const shareReferralCode = useCallback((): void => {
+    // In production, use expo-sharing
+    console.log('Sharing referral code:', stats.referralCode);
+  }, [stats.referralCode]);
+
+  const applyReferralCode = useCallback((code: string): boolean => {
+    if (!user) return false;
+    // Mock applying a referral code - gives bonus coins
+    if (code.startsWith('SAGE-')) {
+      updateUser({
+        coins: user.coins + 1000,
+        stars: user.stars + 50,
+      });
+      return true;
+    }
+    return false;
+  }, [user, updateUser]);
+
+  const value: ReferralsContextType = {
+    referrals,
+    stats,
+    shareReferralCode,
+    applyReferralCode,
+  };
+
+  return (
+    <ReferralsContext.Provider value={value}>
+      {children}
+    </ReferralsContext.Provider>
+  );
+}
+
+export function useReferrals(): ReferralsContextType {
+  const context = useContext(ReferralsContext);
+  if (!context) {
+    throw new Error('useReferrals must be used within a ReferralsProvider');
+  }
+  return context;
+}
+
+// ============================================================================
 // COMBINED STORE PROVIDER
 // ============================================================================
 
@@ -928,7 +1410,19 @@ export function StoreProvider({ children }: StoreProviderProps): React.ReactElem
         <PredictionsProvider>
           <ChallengesProviderWrapper>
             <AchievementsProviderWrapper>
-              <AccumulatorProviderWrapper>{children}</AccumulatorProviderWrapper>
+              <AccumulatorProviderWrapper>
+                <FriendsProviderWrapper>
+                  <SettingsProviderWrapper>
+                    <StreakShieldsProviderWrapper>
+                      <InsightsProviderWrapper>
+                        <ReferralsProviderWrapper>
+                          {children}
+                        </ReferralsProviderWrapper>
+                      </InsightsProviderWrapper>
+                    </StreakShieldsProviderWrapper>
+                  </SettingsProviderWrapper>
+                </FriendsProviderWrapper>
+              </AccumulatorProviderWrapper>
             </AchievementsProviderWrapper>
           </ChallengesProviderWrapper>
         </PredictionsProvider>
@@ -951,4 +1445,24 @@ function AchievementsProviderWrapper({ children }: { children: React.ReactNode }
 
 function AccumulatorProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
   return <AccumulatorProvider>{children}</AccumulatorProvider>;
+}
+
+function FriendsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <FriendsProvider>{children}</FriendsProvider>;
+}
+
+function SettingsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <SettingsProvider>{children}</SettingsProvider>;
+}
+
+function StreakShieldsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <StreakShieldsProvider>{children}</StreakShieldsProvider>;
+}
+
+function InsightsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <InsightsProvider>{children}</InsightsProvider>;
+}
+
+function ReferralsProviderWrapper({ children }: { children: React.ReactNode }): React.ReactElement {
+  return <ReferralsProvider>{children}</ReferralsProvider>;
 }
