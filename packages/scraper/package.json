@@ -12,9 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dashboard": "npx tsx src/cli/dashboard.ts",
-    "status": "npx tsx src/cli/quick-status.ts",
-    "dev-dashboard": "npx tsx src/dev-dashboard/server.ts",
-    "serve": "npx tsx src/dev-dashboard/server.ts"
+    "status": "npx tsx src/cli/quick-status.ts"
   },
   "dependencies": {
     "@sport-sage/database": "workspace:*",

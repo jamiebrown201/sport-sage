@@ -1,0 +1,25 @@
+{
+  "name": "@sport-sage/cms",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "scripts": {
+    "build": "tsc || true",
+    "dev": "npx tsx watch src/server.ts",
+    "start": "npx tsx src/server.ts",
+    "typecheck": "tsc --noEmit || true"
+  },
+  "dependencies": {
+    "@sport-sage/database": "workspace:*",
+    "@aws-sdk/client-cloudwatch-logs": "^3.700.0",
+    "@aws-sdk/client-lambda": "^3.700.0",
+    "drizzle-orm": "^0.38.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.2"
+  }
+}
