@@ -45,7 +45,7 @@ export class ScraperStack extends cdk.Stack {
     // Default Lambda props for scrapers (more memory and timeout)
     const defaultScraperProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
-      architecture: lambda.Architecture.ARM_64,
+      architecture: lambda.Architecture.X86_64, // Required for playwright-aws-lambda (only x86_64 Chromium available)
       memorySize: 1024,
       timeout: cdk.Duration.minutes(5),
       environment: commonEnv,
@@ -56,17 +56,20 @@ export class ScraperStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         externalModules: ['@aws-sdk/*'],
-        // Include playwright dependencies
-        nodeModules: ['playwright-core', 'playwright-aws-lambda'],
+        // Include playwright and chromium for Lambda
+        nodeModules: ['playwright-core', '@sparticuz/chromium'],
       },
     };
 
     // Sync Fixtures - every 6 hours
+    // Higher memory for Playwright/Chromium - also gives faster CPU
     const syncFixturesHandler = new NodejsFunction(this, 'SyncFixtures', {
       ...defaultScraperProps,
       functionName: `sport-sage-${config.environment}-sync-fixtures`,
       entry: path.join(__dirname, '../../../packages/scraper/src/jobs/sync-fixtures.ts'),
       handler: 'handler',
+      memorySize: 2048, // More memory for Chromium and faster CPU
+      timeout: cdk.Duration.minutes(10), // Longer timeout for scraping all sports
     });
 
     databaseSecret.grantRead(syncFixturesHandler);
@@ -95,6 +98,31 @@ export class ScraperStack extends cdk.Stack {
       ruleName: `sport-sage-${config.environment}-sync-live-scores`,
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(syncLiveScoresHandler)],
+    });
+
+    // Transition Events - every minute (marks scheduled events as live when start time passes)
+    const transitionEventsHandler = new NodejsFunction(this, 'TransitionEvents', {
+      ...defaultScraperProps,
+      functionName: `sport-sage-${config.environment}-transition-events`,
+      entry: path.join(__dirname, '../../../packages/scraper/src/jobs/transition-events.ts'),
+      handler: 'handler',
+      memorySize: 256, // Lightweight - no browser needed
+      timeout: cdk.Duration.seconds(30),
+      // Override bundling to exclude playwright
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        externalModules: ['@aws-sdk/*'],
+      },
+    });
+
+    databaseSecret.grantRead(transitionEventsHandler);
+    databaseCluster.grantDataApiAccess(transitionEventsHandler);
+
+    new events.Rule(this, 'TransitionEventsSchedule', {
+      ruleName: `sport-sage-${config.environment}-transition-events`,
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(transitionEventsHandler)],
     });
 
     // Sync Odds - every 15 minutes

@@ -69,6 +69,9 @@ export class DatabaseStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       securityGroups: [this.securityGroup],
       defaultDatabaseName: 'sportsage',
+      // Storage encryption (always on for security)
+      storageEncrypted: true,
+      // Backup configuration
       backup: {
         retention: config.environment === 'prod'
           ? cdk.Duration.days(30)

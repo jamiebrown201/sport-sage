@@ -2,6 +2,7 @@
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { DatabaseStack } from '../lib/stacks/database-stack';
+import { MigrationStack } from '../lib/stacks/migration-stack';
 import { AuthStack } from '../lib/stacks/auth-stack';
 import { QueueStack } from '../lib/stacks/queue-stack';
 import { ApiStack } from '../lib/stacks/api-stack';
@@ -26,6 +27,14 @@ const databaseStack = new DatabaseStack(app, `${prefix}-Database`, {
   env,
   config,
   description: `Sport Sage ${config.environment} database infrastructure`,
+});
+
+// Migration Stack - runs Drizzle migrations on deployment
+// Uses Fn.importValue to avoid tight coupling with Database stack
+const migrationStack = new MigrationStack(app, `${prefix}-Migration`, {
+  env,
+  config,
+  description: `Sport Sage ${config.environment} database migrations`,
 });
 
 // Auth Stack
@@ -69,9 +78,11 @@ const scraperStack = new ScraperStack(app, `${prefix}-Scraper`, {
 
 // Add dependencies
 apiStack.addDependency(databaseStack);
+apiStack.addDependency(migrationStack);  // Wait for migrations before API
 apiStack.addDependency(authStack);
 apiStack.addDependency(queueStack);
 scraperStack.addDependency(databaseStack);
+scraperStack.addDependency(migrationStack);  // Wait for migrations before scrapers
 scraperStack.addDependency(queueStack);
 
 // Tags

@@ -26,10 +26,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-rds-data": "^3.700.0",
-    "drizzle-orm": "^0.38.2"
+    "drizzle-orm": "^0.38.2",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.30.1",
     "typescript": "^5.9.2"
   }

@@ -73,10 +73,11 @@ async function processRecord(record: SQSRecord): Promise<void> {
     }
 
     // Get all pending predictions for this event
+    // Use raw SQL for enum comparison (Data API compatibility)
     const pendingPredictions = await db.query.predictions.findMany({
       where: and(
         eq(predictions.eventId, message.eventId),
-        eq(predictions.status, 'pending')
+        sql`${predictions.status}::text = 'pending'`
       ),
       with: {
         outcome: true,
@@ -232,10 +233,11 @@ async function settleSinglePrediction(db: any, prediction: any, result: any): Pr
 
 async function settleAccumulatorSelections(db: any, eventId: string): Promise<void> {
   // Get all pending accumulator selections for this event
+  // Use raw SQL for enum comparison (Data API compatibility)
   const pendingSelections = await db.query.accumulatorSelections.findMany({
     where: and(
       eq(accumulatorSelections.eventId, eventId),
-      eq(accumulatorSelections.status, 'pending')
+      sql`${accumulatorSelections.status}::text = 'pending'`
     ),
     with: {
       outcome: true,

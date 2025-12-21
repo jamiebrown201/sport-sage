@@ -21,3 +21,6 @@ export * from './social';
 
 // Shop schemas
 export * from './shop';
+
+// Monitoring schemas
+export * from './monitoring';

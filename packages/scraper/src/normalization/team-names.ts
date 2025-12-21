@@ -10,9 +10,73 @@ import { logger } from '../utils/logger';
  * 2. Auto-learning: High-confidence matches create new aliases
  * 3. Generic patterns: No sport/team-specific hardcoding
  * 4. Fuzzy matching: Falls back to similarity matching
+ * 5. Caching: In-memory cache for performance at scale
  *
  * Works for ANY sport - football, tennis, darts, esports, etc.
  */
+
+// ============ CACHING LAYER ============
+
+interface TeamsCache {
+  teams: Array<{ id: string; name: string }>;
+  lastRefresh: number;
+  ttl: number; // milliseconds
+}
+
+// Teams cache - refreshed every 5 minutes
+const teamsCache: TeamsCache = {
+  teams: [],
+  lastRefresh: 0,
+  ttl: 5 * 60 * 1000, // 5 minutes
+};
+
+// Alias cache - LRU-style map (alias:source -> teamId)
+const aliasCache = new Map<string, string | null>();
+const ALIAS_CACHE_MAX_SIZE = 1000;
+
+function getAliasCacheKey(alias: string, source: string): string {
+  return `${alias.toLowerCase()}:${source}`;
+}
+
+function setAliasCache(alias: string, source: string, teamId: string | null): void {
+  // Simple LRU: if at max, delete oldest entry
+  if (aliasCache.size >= ALIAS_CACHE_MAX_SIZE) {
+    const firstKey = aliasCache.keys().next().value;
+    if (firstKey) aliasCache.delete(firstKey);
+  }
+  aliasCache.set(getAliasCacheKey(alias, source), teamId);
+}
+
+function getAliasFromCache(alias: string, source: string): string | null | undefined {
+  return aliasCache.get(getAliasCacheKey(alias, source));
+}
+
+async function getCachedTeams(): Promise<Array<{ id: string; name: string }>> {
+  const now = Date.now();
+
+  if (teamsCache.teams.length === 0 || now - teamsCache.lastRefresh > teamsCache.ttl) {
+    const db = getDb();
+    teamsCache.teams = await db.query.teams.findMany({
+      columns: { id: true, name: true },
+    });
+    teamsCache.lastRefresh = now;
+    logger.debug(`Refreshed teams cache: ${teamsCache.teams.length} teams`);
+  }
+
+  return teamsCache.teams;
+}
+
+/**
+ * Invalidate caches (call after creating/merging teams)
+ */
+export function invalidateTeamCaches(): void {
+  teamsCache.teams = [];
+  teamsCache.lastRefresh = 0;
+  aliasCache.clear();
+  logger.debug('Team caches invalidated');
+}
+
+// ============ END CACHING ============
 
 // Generic patterns that apply to ANY sport (not team-specific)
 const GENERIC_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
@@ -136,18 +200,26 @@ export function combinedSimilarity(str1: string, str2: string): number {
 
 /**
  * Find team by exact alias match (fastest path)
+ * Uses in-memory cache for repeated lookups
  */
 export async function findTeamByAlias(
   alias: string,
   source: string
 ): Promise<string | null> {
-  const db = getDb();
+  // Check cache first
+  const cached = getAliasFromCache(alias, source);
+  if (cached !== undefined) {
+    return cached;
+  }
 
+  const db = getDb();
   const result = await db.query.teamAliases.findFirst({
     where: and(eq(teamAliases.alias, alias), eq(teamAliases.source, source)),
   });
 
-  return result?.teamId || null;
+  const teamId = result?.teamId || null;
+  setAliasCache(alias, source, teamId);
+  return teamId;
 }
 
 /**
@@ -202,6 +274,9 @@ export async function findOrCreateTeam(
     source,
   });
 
+  // Invalidate teams cache since we added a new team
+  invalidateTeamCaches();
+
   logger.info(`Created new team: "${normalized}" from source ${source}`);
   return newTeam!.id;
 }
@@ -228,16 +303,16 @@ async function createAliasIfNotExists(
 
 /**
  * Fuzzy match against all teams in database
+ * Uses cached team list for performance (refreshed every 5 min)
  */
 export async function fuzzyMatchTeam(
   name: string,
   threshold = 0.85
 ): Promise<{ id: string; similarity: number } | null> {
-  const db = getDb();
   const normalized = normalizeTeamName(name);
 
-  // Get all teams (consider caching for high-frequency calls)
-  const allTeams = await db.query.teams.findMany();
+  // Use cached teams for performance
+  const allTeams = await getCachedTeams();
 
   let bestMatch: { id: string; similarity: number } | null = null;
 

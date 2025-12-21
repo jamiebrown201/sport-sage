@@ -1,27 +1,35 @@
-import type { ScheduledHandler } from 'aws-lambda';
+import type { ScheduledHandler, Context } from 'aws-lambda';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getDb, events } from '@sport-sage/database';
 import { eq, sql } from 'drizzle-orm';
 import { launchBrowser, createPage } from '../utils/browser';
 import { logger } from '../utils/logger';
-import { FlashscoreLiveScoresScraper } from '../scrapers/flashscore/live-scores';
+import { LiveScoresOrchestrator } from '../scrapers/live-scores-orchestrator';
+import { RunTracker } from '../utils/run-tracker';
 
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'eu-west-1' });
 const SETTLEMENT_QUEUE_URL = process.env.SETTLEMENT_QUEUE_URL;
 
-export const handler: ScheduledHandler = async (event) => {
+export const handler: ScheduledHandler = async (event, context: Context) => {
   logger.setContext({ job: 'sync-live-scores' });
   logger.info('Starting live scores sync');
+
+  // Initialize run tracker for monitoring
+  const tracker = new RunTracker('sync_live_scores', 'multi', context.awsRequestId);
+  await tracker.start();
 
   const db = getDb();
 
   // First, check if there are any live events
-  const liveEvents = await db.query.events.findMany({
-    where: eq(events.status, 'live'),
-  });
+  // Use raw SQL for enum comparison (Data API compatibility)
+  const liveEvents = await db
+    .select()
+    .from(events)
+    .where(sql`${events.status}::text = 'live'`);
 
   if (liveEvents.length === 0) {
     logger.info('No live events, skipping sync');
+    await tracker.complete();
     return;
   }
 
@@ -31,21 +39,34 @@ export const handler: ScheduledHandler = async (event) => {
 
   try {
     browser = await launchBrowser();
-    const page = await createPage(browser);
-    const scraper = new FlashscoreLiveScoresScraper(page);
 
-    // Get external IDs to fetch
+    // Use multi-source orchestrator - tries free sources first!
+    const orchestrator = new LiveScoresOrchestrator();
+
+    // Get all external IDs (any source)
     const externalIds = liveEvents
-      .map((e) => e.externalFlashscoreId)
+      .flatMap((e) => [
+        e.externalFlashscoreId,
+        e.externalOddscheckerId,
+      ])
       .filter((id): id is string => !!id);
 
-    const scores = await scraper.getLiveScores(externalIds);
+    const result = await orchestrator.getLiveScores(browser, externalIds);
+    const scores = result.scores;
+
+    logger.info(`Sources used: ${result.sourcesUsed.join(', ') || 'none'}`);
+    orchestrator.logSummary();
 
     let updated = 0;
     let finished = 0;
 
     for (const [externalId, score] of scores) {
-      const event = liveEvents.find((e) => e.externalFlashscoreId === externalId);
+      // Find event by any of its external IDs
+      const event = liveEvents.find(
+        (e) =>
+          e.externalFlashscoreId === externalId ||
+          e.externalOddscheckerId === externalId
+      );
       if (!event) continue;
 
       try {
@@ -93,8 +114,16 @@ export const handler: ScheduledHandler = async (event) => {
       }
     }
 
+    // Record stats for monitoring
+    tracker.recordSportStats('all', {
+      processed: liveEvents.length,
+      updated,
+    });
+
+    await tracker.complete();
     logger.info('Live scores sync completed', { updated, finished });
   } catch (error) {
+    await tracker.fail(error as Error);
     logger.error('Live scores sync failed', error);
     throw error;
   } finally {

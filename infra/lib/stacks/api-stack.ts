@@ -66,7 +66,7 @@ export class ApiStack extends cdk.Stack {
 
     // Create handler functions
     const handlers: Record<string, NodejsFunction> = {};
-    const handlerNames = ['auth', 'events', 'predictions', 'wallet', 'leaderboard', 'social', 'shop', 'challenges', 'achievements'];
+    const handlerNames = ['auth', 'events', 'predictions', 'wallet', 'leaderboard', 'social', 'shop', 'challenges', 'achievements', 'monitoring'];
 
     for (const name of handlerNames) {
       handlers[name] = new NodejsFunction(this, `${name}Handler`, {
@@ -115,8 +115,9 @@ export class ApiStack extends cdk.Stack {
         handlers[name]
       );
 
-      // Auth endpoints don't require authorization
-      const needsAuth = name !== 'auth';
+      // Auth and monitoring endpoints don't require authorization
+      // TODO: Add admin auth for monitoring in production
+      const needsAuth = name !== 'auth' && name !== 'monitoring';
 
       this.api.addRoutes({
         path: `/api/${name}`,

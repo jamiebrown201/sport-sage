@@ -1,6 +1,6 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
-import { retryWithBackoff } from '../../utils/browser';
+import { retryWithBackoff, randomDelay } from '../../utils/browser';
 
 export interface LiveScore {
   externalId: string;
@@ -21,6 +21,14 @@ export class FlashscoreLiveScoresScraper {
       return scores;
     }
 
+    // Normalize external IDs - strip any g_X_ prefixes for comparison
+    const normalizedIds = new Set(
+      externalIds.map(id => id.replace(/^g_\d+_/, ''))
+    );
+
+    // Also keep original IDs for direct matching
+    const originalIds = new Set(externalIds);
+
     logger.info(`Fetching live scores for ${externalIds.length} events`);
 
     try {
@@ -31,10 +39,16 @@ export class FlashscoreLiveScoresScraper {
         });
       });
 
+      // Random delay to appear more human-like
+      await randomDelay(500, 1500);
+
       // Wait for events to load
       await this.page.waitForSelector('.event__match', { timeout: 10000 }).catch(() => {
         logger.debug('No live matches found');
       });
+
+      // Another small delay before scraping
+      await randomDelay(300, 800);
 
       // Get all live matches
       const matches = await this.page.$$('.event__match--live, .event__match--onlyLive');
@@ -44,12 +58,20 @@ export class FlashscoreLiveScoresScraper {
           const id = await match.getAttribute('id');
           if (!id) continue;
 
-          const externalId = id.replace('g_1_', '');
-          if (!externalIds.includes(externalId)) continue;
+          // Extract the base ID (strip g_X_ prefix)
+          const baseId = id.replace(/^g_\d+_/, '');
 
-          const score = await this.parseScoreElement(match, externalId);
+          // Check if this ID matches any of our events (with or without prefix)
+          const matchingExternalId = externalIds.find(extId => {
+            const normalizedExtId = extId.replace(/^g_\d+_/, '');
+            return normalizedExtId === baseId || extId === id;
+          });
+
+          if (!matchingExternalId) continue;
+
+          const score = await this.parseScoreElement(match, matchingExternalId);
           if (score) {
-            scores.set(externalId, score);
+            scores.set(matchingExternalId, score);
           }
         } catch (error) {
           logger.debug('Failed to parse live match', { error });
@@ -63,15 +85,23 @@ export class FlashscoreLiveScoresScraper {
           const id = await match.getAttribute('id');
           if (!id) continue;
 
-          const externalId = id.replace('g_1_', '');
-          if (!externalIds.includes(externalId)) continue;
+          // Extract the base ID (strip g_X_ prefix)
+          const baseId = id.replace(/^g_\d+_/, '');
+
+          // Check if this ID matches any of our events
+          const matchingExternalId = externalIds.find(extId => {
+            const normalizedExtId = extId.replace(/^g_\d+_/, '');
+            return normalizedExtId === baseId || extId === id;
+          });
+
+          if (!matchingExternalId) continue;
 
           // Check if it has a final score
           const hasScore = await match.$('.event__score');
           if (hasScore) {
-            const score = await this.parseFinishedMatch(match, externalId);
+            const score = await this.parseFinishedMatch(match, matchingExternalId);
             if (score) {
-              scores.set(externalId, score);
+              scores.set(matchingExternalId, score);
             }
           }
         } catch (error) {
