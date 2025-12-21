@@ -15,7 +15,7 @@
 
 import http from 'http';
 import { URL } from 'url';
-import { getDb, events, sports, teams, competitions, teamAliases } from '@sport-sage/database';
+import { getDb, events, sports, teams, competitions, teamAliases, scraperRuns, scraperAlerts } from '@sport-sage/database';
 import { desc, gte, lte, eq, and, count, sql, ilike } from 'drizzle-orm';
 import { LambdaClient, InvokeCommand, ListFunctionsCommand, GetFunctionCommand } from '@aws-sdk/client-lambda';
 import { CloudWatchLogsClient, DescribeLogStreamsCommand, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
@@ -213,13 +213,13 @@ function html(title: string, content: string, nav = true): string {
   <nav>
     <span class="logo">⚽ Sport Sage</span>
     <a href="/">Dashboard</a>
+    <a href="/monitoring">Monitoring</a>
     <a href="/lifecycle">Lifecycle</a>
     <a href="/lambdas">Lambdas</a>
     <a href="/events">Events</a>
     <a href="/teams">Teams</a>
     <a href="/competitions">Competitions</a>
     <a href="/query">Query</a>
-    <a href="/stealth-test">Stealth Test</a>
     <span class="env">${ENVIRONMENT.toUpperCase()}</span>
   </nav>
   ` : ''}
@@ -957,6 +957,233 @@ async function handleLifecycle(): Promise<string> {
   `);
 }
 
+// Monitoring page - scraper health, source status, alerts
+async function handleMonitoring(): Promise<string> {
+  const db = getDb();
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  // Get summary stats
+  const recentRuns = await db
+    .select()
+    .from(scraperRuns)
+    .where(gte(scraperRuns.startedAt, oneDayAgo))
+    .orderBy(desc(scraperRuns.startedAt));
+
+  const totalRuns = recentRuns.length;
+  const successful = recentRuns.filter(r => r.status === 'success').length;
+  const failed = recentRuns.filter(r => r.status === 'failed').length;
+  const partial = recentRuns.filter(r => r.status === 'partial').length;
+  const successRate = totalRuns > 0 ? Math.round((successful / totalRuns) * 100) : 0;
+  const totalItemsProcessed = recentRuns.reduce((sum, r) => sum + (r.itemsProcessed || 0), 0);
+
+  // Get active alerts
+  const activeAlerts = await db
+    .select()
+    .from(scraperAlerts)
+    .where(sql`${scraperAlerts.acknowledgedAt} IS NULL`)
+    .orderBy(desc(scraperAlerts.createdAt))
+    .limit(20);
+
+  // Group runs by job type
+  const byJobType: Record<string, { total: number; success: number; failed: number; lastRun: Date | null; avgDuration: number }> = {};
+  for (const run of recentRuns) {
+    const jt = run.jobType;
+    if (!byJobType[jt]) {
+      byJobType[jt] = { total: 0, success: 0, failed: 0, lastRun: null, avgDuration: 0 };
+    }
+    byJobType[jt].total++;
+    if (run.status === 'success') byJobType[jt].success++;
+    if (run.status === 'failed') byJobType[jt].failed++;
+    if (!byJobType[jt].lastRun || run.startedAt > byJobType[jt].lastRun) {
+      byJobType[jt].lastRun = run.startedAt;
+    }
+  }
+
+  // Calculate avg durations
+  for (const jt of Object.keys(byJobType)) {
+    const runs = recentRuns.filter(r => r.jobType === jt && r.durationMs);
+    if (runs.length > 0) {
+      byJobType[jt].avgDuration = Math.round(runs.reduce((sum, r) => sum + (r.durationMs || 0), 0) / runs.length);
+    }
+  }
+
+  // Get source status from runs
+  const sourceStats: Record<string, { success: number; failed: number; lastRun: Date | null }> = {};
+  const sources = ['flashscore', 'oddschecker', 'sofascore', 'espn', '365scores', 'fotmob', 'livescore', 'oddsportal', 'multi'];
+  for (const source of sources) {
+    sourceStats[source] = { success: 0, failed: 0, lastRun: null };
+  }
+  for (const run of recentRuns) {
+    const src = run.source;
+    if (sourceStats[src]) {
+      if (run.status === 'success') sourceStats[src].success++;
+      if (run.status === 'failed') sourceStats[src].failed++;
+      if (!sourceStats[src].lastRun || run.startedAt > sourceStats[src].lastRun) {
+        sourceStats[src].lastRun = run.startedAt;
+      }
+    }
+  }
+
+  // Check overall health
+  const dbHealthy = true; // We got this far so DB is working
+  const recentActivity = recentRuns.length > 0 && (Date.now() - recentRuns[0].startedAt.getTime()) < 10 * 60 * 1000;
+  const lowFailureRate = successRate >= 80;
+  const noActiveCritical = !activeAlerts.some(a => a.severity === 'critical');
+  const isHealthy = dbHealthy && recentActivity && lowFailureRate && noActiveCritical;
+
+  // Build source cards
+  const sourceCards = sources.filter(s => s !== 'multi').map(source => {
+    const stats = sourceStats[source];
+    const total = stats.success + stats.failed;
+    const rate = total > 0 ? Math.round((stats.success / total) * 100) : 0;
+    const status = total === 0 ? 'unknown' : rate >= 80 ? 'healthy' : rate >= 50 ? 'degraded' : 'down';
+    const statusColor = status === 'healthy' ? '#00d4aa' : status === 'degraded' ? '#ffaa00' : status === 'down' ? '#ff4444' : '#888';
+    const statusBg = status === 'healthy' ? '#0d4d3a' : status === 'degraded' ? '#4d3d0d' : status === 'down' ? '#4d0d0d' : '#2d2d4d';
+
+    return `
+      <div class="stat" style="background: ${statusBg}; border: 1px solid ${statusColor}40;">
+        <div style="font-size: 0.85em; color: #888; text-transform: capitalize; margin-bottom: 5px;">${source}</div>
+        <div class="stat-value" style="color: ${statusColor};">${rate}%</div>
+        <div class="stat-label">${stats.success}/${total} success</div>
+        ${stats.lastRun ? `<div style="font-size: 0.75em; color: #666; margin-top: 5px;">${timeAgo(stats.lastRun)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Build job type table
+  const jobTypeRows = Object.entries(byJobType).map(([jt, stats]) => {
+    const rate = stats.total > 0 ? Math.round((stats.success / stats.total) * 100) : 0;
+    return `
+      <tr>
+        <td style="font-family: monospace;">${jt}</td>
+        <td>${stats.total}</td>
+        <td><span class="badge badge-${rate >= 80 ? 'success' : rate >= 50 ? 'warning' : 'error'}">${rate}%</span></td>
+        <td>${stats.avgDuration > 0 ? formatDuration(stats.avgDuration) : '-'}</td>
+        <td class="time-ago">${stats.lastRun ? timeAgo(stats.lastRun) : '-'}</td>
+      </tr>
+    `;
+  }).join('');
+
+  // Build recent runs table
+  const recentRunsRows = recentRuns.slice(0, 15).map(run => `
+    <tr>
+      <td style="font-family: monospace; font-size: 0.85em;">${run.jobType}</td>
+      <td>${run.source}</td>
+      <td><span class="badge badge-${run.status === 'success' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}">${run.status}</span></td>
+      <td>${run.durationMs ? formatDuration(run.durationMs) : '-'}</td>
+      <td>${run.itemsProcessed || 0}</td>
+      <td class="time-ago">${timeAgo(run.startedAt)}</td>
+    </tr>
+  `).join('');
+
+  // Build alerts list
+  const alertsHtml = activeAlerts.length === 0
+    ? '<div class="empty">No active alerts</div>'
+    : activeAlerts.map(alert => {
+        const severityColor = alert.severity === 'critical' ? '#ff4444' : alert.severity === 'error' ? '#ff6666' : '#ffaa00';
+        return `
+          <div style="padding: 12px; background: ${alert.severity === 'critical' ? '#4d0d0d' : '#2d2d4d'}; border-radius: 8px; border-left: 3px solid ${severityColor}; margin-bottom: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <span class="badge" style="background: ${severityColor}30; color: ${severityColor};">${alert.severity?.toUpperCase()}</span>
+                <span style="color: #888; margin-left: 10px; font-size: 0.85em;">${alert.alertType}</span>
+              </div>
+              <form method="POST" action="/monitoring/acknowledge/${alert.id}" style="display: inline;">
+                <button type="submit" class="btn btn-secondary" style="padding: 4px 10px; font-size: 0.8em;">Acknowledge</button>
+              </form>
+            </div>
+            <p style="margin: 8px 0 0; color: #ccc;">${alert.message}</p>
+            <div style="font-size: 0.75em; color: #666; margin-top: 5px;">${timeAgo(alert.createdAt)}</div>
+          </div>
+        `;
+      }).join('');
+
+  return html('Monitoring', `
+    <h1>Scraper Monitoring</h1>
+
+    <!-- Health Status Banner -->
+    <div class="card" style="background: ${isHealthy ? '#0d4d3a' : '#4d0d0d'}; border-color: ${isHealthy ? '#00d4aa' : '#ff4444'};">
+      <div style="display: flex; align-items: center; gap: 15px;">
+        <div style="width: 20px; height: 20px; border-radius: 50%; background: ${isHealthy ? '#00d4aa' : '#ff4444'}; ${!isHealthy ? 'animation: pulse 2s infinite;' : ''}"></div>
+        <div>
+          <div style="font-size: 1.3em; font-weight: bold; color: ${isHealthy ? '#00d4aa' : '#ff4444'};">
+            ${isHealthy ? 'System Healthy' : 'System Degraded'}
+          </div>
+          <div style="color: #888; font-size: 0.9em;">
+            ${!recentActivity ? 'No recent scraper activity' : ''}
+            ${!lowFailureRate ? `High failure rate (${successRate}%)` : ''}
+            ${!noActiveCritical ? 'Critical alerts require attention' : ''}
+            ${isHealthy ? 'All systems operational' : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats -->
+    <div class="stats-grid" style="margin-bottom: 30px;">
+      <div class="stat">
+        <div class="stat-value">${totalRuns}</div>
+        <div class="stat-label">Total Runs (24h)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" style="color: ${successRate >= 80 ? '#00d4aa' : successRate >= 50 ? '#ffaa00' : '#ff4444'};">${successRate}%</div>
+        <div class="stat-label">Success Rate</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">${totalItemsProcessed.toLocaleString()}</div>
+        <div class="stat-label">Items Processed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" style="color: ${activeAlerts.length > 0 ? '#ffaa00' : '#888'};">${activeAlerts.length}</div>
+        <div class="stat-label">Active Alerts</div>
+      </div>
+    </div>
+
+    <!-- Source Health Grid -->
+    <h2>Source Health</h2>
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom: 30px;">
+      ${sourceCards}
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <!-- Job Type Breakdown -->
+      <div class="card">
+        <h2 style="margin-top: 0;">By Job Type</h2>
+        <table>
+          <thead><tr><th>Job</th><th>Runs</th><th>Success</th><th>Avg Time</th><th>Last Run</th></tr></thead>
+          <tbody>${jobTypeRows || '<tr><td colspan="5" class="empty">No data</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <!-- Active Alerts -->
+      <div class="card">
+        <h2 style="margin-top: 0;">Active Alerts (${activeAlerts.length})</h2>
+        ${alertsHtml}
+      </div>
+    </div>
+
+    <!-- Recent Runs -->
+    <div class="card">
+      <h2 style="margin-top: 0;">Recent Runs</h2>
+      <table>
+        <thead><tr><th>Job</th><th>Source</th><th>Status</th><th>Duration</th><th>Items</th><th>Time</th></tr></thead>
+        <tbody>${recentRunsRows || '<tr><td colspan="6" class="empty">No recent runs</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <!-- Auto-refresh script -->
+    <script>
+      setTimeout(() => location.reload(), 30000);
+    </script>
+  `);
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
 // Stealth Test Page - runs browser with stealth mode and checks detection
 async function handleStealthTest(action?: string): Promise<string> {
   let testResult = '';
@@ -1165,6 +1392,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Handle alert acknowledgment
+  if (method === 'POST' && path.startsWith('/monitoring/acknowledge/')) {
+    const alertId = path.split('/').pop()!;
+    try {
+      const db = getDb();
+      await db.execute(sql`
+        UPDATE scraper_alerts
+        SET acknowledged_at = NOW(), acknowledged_by = 'dashboard'
+        WHERE id = ${alertId}::uuid
+      `);
+      res.writeHead(302, { Location: '/monitoring' });
+    } catch (e) {
+      res.writeHead(302, { Location: '/monitoring?error=Failed+to+acknowledge+alert' });
+    }
+    res.end();
+    return;
+  }
+
   if (!dbConfig.configured) {
     res.end(noDatabasePage());
     return;
@@ -1175,6 +1420,8 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/' || path === '/dashboard') {
       body = await handleDashboard();
+    } else if (path === '/monitoring') {
+      body = await handleMonitoring();
     } else if (path === '/lifecycle') {
       body = await handleLifecycle();
     } else if (path === '/lambdas') {
@@ -1229,10 +1476,11 @@ server.listen(PORT, () => {
   ║                                                        ║
   ║   Pages:                                               ║
   ║   • /           Dashboard & stats                      ║
+  ║   • /monitoring Scraper health & alerts                ║
+  ║   • /lifecycle  Event status flow                      ║
   ║   • /lambdas    Trigger & monitor Lambda functions     ║
   ║   • /events     Browse events                          ║
   ║   • /teams      Browse teams & aliases                 ║
-  ║   • /competitions  Browse competitions                 ║
   ║   • /query      Run SQL queries                        ║
   ║                                                        ║
   ╚════════════════════════════════════════════════════════╝
