@@ -20,6 +20,9 @@ import { handleDashboard } from './pages/dashboard.js';
 import { handleLifecycle } from './pages/lifecycle.js';
 import { handleLambdas, handleLambdaLogs, invokeLambda } from './pages/lambdas.js';
 import { handleEvents } from './pages/events.js';
+import { handleEventDetail } from './pages/event-detail.js';
+import { handleLiveScores } from './pages/live-scores.js';
+import { handlePredictions } from './pages/predictions.js';
 import { handleTeams, handleTeamDetail } from './pages/teams.js';
 import { handleCompetitions } from './pages/competitions.js';
 import { handleQuery } from './pages/query.js';
@@ -117,6 +120,19 @@ pnpm --filter @sport-sage/cms start</pre>
         body = await handleEvents(query, ENVIRONMENT);
         break;
 
+      case path === '/live-scores':
+        body = await handleLiveScores(ENVIRONMENT);
+        break;
+
+      case path === '/predictions':
+        body = await handlePredictions(query, ENVIRONMENT);
+        break;
+
+      case path.startsWith('/events/') && path !== '/events':
+        const eventId = path.split('/')[2]!;
+        body = await handleEventDetail(eventId, ENVIRONMENT);
+        break;
+
       case path === '/teams':
         body = await handleTeams(query, ENVIRONMENT);
         break;
@@ -163,13 +179,13 @@ server.listen(PORT, () => {
   ║   Environment: ${ENVIRONMENT.toUpperCase().padEnd(38)}║
   ║                                                        ║
   ║   Pages:                                               ║
-  ║   • /           Dashboard overview                     ║
-  ║   • /monitoring Scraper health & alerts                ║
-  ║   • /lifecycle  Event status flow                      ║
-  ║   • /lambdas    Lambda function management             ║
-  ║   • /events     Browse events                          ║
-  ║   • /teams      Browse teams                           ║
-  ║   • /query      SQL query runner                       ║
+  ║   • /            Dashboard overview                    ║
+  ║   • /live-scores Live scores & source health           ║
+  ║   • /predictions Predictions & bets                    ║
+  ║   • /monitoring  Scraper health & alerts               ║
+  ║   • /events      Browse events (/:id for detail)       ║
+  ║   • /lambdas     Lambda functions                      ║
+  ║   • /query       SQL query runner                      ║
   ║                                                        ║
   ╚════════════════════════════════════════════════════════╝
   `);
