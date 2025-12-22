@@ -34,12 +34,23 @@ export class ScraperStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
+    // IPRoyal proxy credentials (stored in Secrets Manager)
+    const iproyalSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'IPRoyalSecret',
+      'sport-sage/iproyal-proxy'
+    );
+
     // Common environment variables
     const commonEnv = {
       DATABASE_RESOURCE_ARN: databaseCluster.clusterArn,
       DATABASE_SECRET_ARN: databaseSecret.secretArn,
       DATABASE_NAME: 'sportsage',
       SETTLEMENT_QUEUE_URL: settlementQueue.queueUrl,
+      // IPRoyal proxy for fallback sources (Flashscore, ESPN, etc.)
+      IPROYAL_USERNAME: iproyalSecret.secretValueFromJson('username').unsafeUnwrap(),
+      IPROYAL_PASSWORD: iproyalSecret.secretValueFromJson('password').unsafeUnwrap(),
+      PROXY_COUNTRY: 'gb',
     };
 
     // Default Lambda props for scrapers (more memory and timeout)
@@ -82,12 +93,15 @@ export class ScraperStack extends cdk.Stack {
     });
 
     // Sync Live Scores - every minute (will exit early if no live events)
+    // More memory needed when using multiple proxy sources (each browser context uses ~200MB)
+    // Longer timeout to allow launching separate browsers for proxy sources
     const syncLiveScoresHandler = new NodejsFunction(this, 'SyncLiveScores', {
       ...defaultScraperProps,
       functionName: `sport-sage-${config.environment}-sync-live-scores`,
       entry: path.join(__dirname, '../../../packages/scraper/src/jobs/sync-live-scores.ts'),
       handler: 'handler',
-      timeout: cdk.Duration.seconds(55), // Less than schedule interval
+      memorySize: 2048, // More memory for multiple proxy browser contexts
+      timeout: cdk.Duration.seconds(120), // Longer timeout for proxy browser launches
     });
 
     databaseSecret.grantRead(syncLiveScoresHandler);

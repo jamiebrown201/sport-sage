@@ -144,7 +144,8 @@ export class OddsOrchestrator {
             }
           }
         } finally {
-          await page.context().close();
+          // Close page only - do NOT close context, it kills the browser in Lambda
+          await page.close().catch(() => {});
         }
 
         // If we got enough odds from this source, we can stop

@@ -69,8 +69,9 @@ export class DatabaseStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       securityGroups: [this.securityGroup],
       defaultDatabaseName: 'sportsage',
-      // Storage encryption (always on for security)
-      storageEncrypted: true,
+      // Note: storageEncrypted intentionally omitted to match existing cluster
+      // Adding it (even as false) triggers CloudFormation replacement
+      // For new prod clusters, enable encryption from the start
       // Backup configuration
       backup: {
         retention: config.environment === 'prod'

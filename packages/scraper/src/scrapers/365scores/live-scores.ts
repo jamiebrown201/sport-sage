@@ -1,330 +1,221 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
 import { randomDelay, retryWithBackoff } from '../../utils/browser';
-
-export interface LiveScore {
-  externalId: string;
-  homeScore: number;
-  awayScore: number;
-  period: string;
-  minute?: number;
-  isFinished: boolean;
-}
+import { matchEvents, type ScrapedEvent } from '../../utils/team-matcher';
+import type { LiveScoresScraper, EventToMatch, ScrapeResult, LiveScore } from '../types';
 
 /**
- * 365Scores scraper - Works FREE without proxy!
+ * 365Scores API scraper - FREE, works without proxy!
  *
+ * 365Scores has a public API that's accessible from AWS IPs.
  * Covers: Football, Basketball, Tennis, Baseball, Hockey
- * 2000+ competitions available
  *
- * Test result (2024-12-21): 63 items found, works without proxy
+ * API endpoint: https://webws.365scores.com/web/games/allscores/?appTypeId=5&langId=1&sportId=X
+ * sportId: 1=Football, 2=Basketball, 3=Tennis, 4=Ice Hockey, 5=Baseball
+ *
+ * Response structure uses homeCompetitor/awayCompetitor objects (not a competitors array)
+ * statusGroup: 2=in progress, 4=finished
  */
-export class Scores365LiveScoresScraper {
+export class Scores365LiveScoresScraper implements LiveScoresScraper {
   constructor(private page: Page) {}
 
-  private readonly sportUrls: Record<string, string> = {
-    football: 'https://www.365scores.com/football',
-    basketball: 'https://www.365scores.com/basketball',
-    tennis: 'https://www.365scores.com/tennis',
-    baseball: 'https://www.365scores.com/baseball',
-    hockey: 'https://www.365scores.com/hockey',
+  // Sport slug mapping to 365Scores sport IDs
+  private readonly sportMap: Record<string, number> = {
+    football: 1,
+    basketball: 2,
+    tennis: 3,
+    ice_hockey: 4,
+    baseball: 5,
+    cricket: 10, // May not be supported
   };
 
-  /**
-   * Get live scores - compatible with orchestrator interface
-   * If externalIds provided, will try to match; otherwise returns all
-   */
-  async getLiveScores(externalIds?: string[]): Promise<Map<string, LiveScore>> {
+  async getLiveScores(events: EventToMatch[]): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
 
-    // If no specific IDs, scrape football by default
-    const sports = externalIds?.length ? this.detectSportsFromIds(externalIds) : ['football'];
-
-    for (const sport of sports) {
-      const sportScores = await this.getLiveScoresForSport(sport);
-      for (const [id, score] of sportScores) {
-        scores.set(id, score);
-      }
+    if (events.length === 0) {
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
 
-    return scores;
+    logger.info(`365Scores: Looking for scores for ${events.length} events`);
+
+    try {
+      // Group events by sport
+      const sportGroups = new Map<string, EventToMatch[]>();
+      for (const event of events) {
+        const sport = event.sportSlug;
+        if (!sportGroups.has(sport)) {
+          sportGroups.set(sport, []);
+        }
+        sportGroups.get(sport)!.push(event);
+      }
+
+      let totalMatched = 0;
+      let totalUnmatched = 0;
+
+      // Fetch for each sport
+      for (const [sport, sportEvents] of sportGroups) {
+        const sportId = this.sportMap[sport];
+        if (!sportId) {
+          logger.debug(`365Scores: No mapping for sport ${sport}`);
+          continue;
+        }
+
+        const result = await this.fetchAndMatchSport(sportId, sport, sportEvents);
+        for (const [id, score] of result.scores) {
+          scores.set(id, score);
+        }
+        totalMatched += result.matchedCount;
+        totalUnmatched += result.unmatchedCount;
+      }
+
+      logger.info(`365Scores: Matched ${totalMatched} events, ${totalUnmatched} unmatched`);
+      return { scores, matchedCount: totalMatched, unmatchedCount: totalUnmatched };
+    } catch (error) {
+      logger.error('365Scores live scores failed', { error });
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
+    }
   }
 
-  /**
-   * Detect which sports to scrape based on external IDs
-   */
-  private detectSportsFromIds(externalIds: string[]): string[] {
-    const sports = new Set<string>();
-
-    for (const id of externalIds) {
-      const idLower = id.toLowerCase();
-      if (idLower.includes('football') || idLower.includes('soccer')) {
-        sports.add('football');
-      } else if (idLower.includes('basketball') || idLower.includes('nba')) {
-        sports.add('basketball');
-      } else if (idLower.includes('tennis')) {
-        sports.add('tennis');
-      } else if (idLower.includes('baseball') || idLower.includes('mlb')) {
-        sports.add('baseball');
-      } else if (idLower.includes('hockey') || idLower.includes('nhl')) {
-        sports.add('hockey');
-      }
-    }
-
-    // Default to football if can't detect
-    if (sports.size === 0) {
-      sports.add('football');
-    }
-
-    return Array.from(sports);
-  }
-
-  async getLiveScoresForSport(sport: string = 'football'): Promise<Map<string, LiveScore>> {
+  private async fetchAndMatchSport(
+    sportId: number,
+    sportName: string,
+    events: EventToMatch[]
+  ): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
-    const url = this.sportUrls[sport] || this.sportUrls.football;
 
-    logger.info(`365Scores: Fetching ${sport} live scores`);
+    // 365Scores API endpoint - use allscores (not current which returns empty)
+    const apiUrl = `https://webws.365scores.com/web/games/allscores/?appTypeId=5&langId=1&sportId=${sportId}`;
 
     try {
       await retryWithBackoff(async () => {
-        await this.page.goto(url, {
+        await this.page.goto(apiUrl, {
           waitUntil: 'domcontentloaded',
-          timeout: 30000,
+          timeout: 15000,
         });
       });
 
-      await randomDelay(1000, 2000);
+      await randomDelay(200, 400);
 
-      // Wait for games to load
-      await this.page.waitForSelector('[class*="game"], [class*="match"]', {
-        timeout: 10000,
-      }).catch(() => {
-        logger.debug('365Scores: No games found');
-      });
+      const bodyText = await this.page.evaluate(() => document.body.innerText);
+      const data = JSON.parse(bodyText);
 
-      // Extract match data
-      const matches = await this.page.evaluate((sportName) => {
-        const results: Array<{
-          id: string;
-          homeTeam: string;
-          awayTeam: string;
-          homeScore: number;
-          awayScore: number;
-          status: string;
-          competition: string;
-        }> = [];
+      // Parse 365Scores API response
+      const scrapedEvents: ScrapedEvent[] = [];
 
-        // 365Scores uses game cards
-        const gameElements = document.querySelectorAll(
-          '[class*="game-card"], [class*="GameCard"], [class*="match"]'
-        );
+      // 365Scores structure: { games: [...] }
+      const games = data.games || [];
 
-        gameElements.forEach((el, idx) => {
-          try {
-            // Find team names
-            const teamEls = el.querySelectorAll('[class*="team-name"], [class*="TeamName"]');
-            const scoreEls = el.querySelectorAll('[class*="score"], [class*="Score"]');
-            const statusEl = el.querySelector('[class*="status"], [class*="time"], [class*="Status"]');
-            const compEl = el.querySelector('[class*="competition"], [class*="league"], [class*="Competition"]');
+      for (const game of games) {
+        try {
+          // 365Scores uses homeCompetitor/awayCompetitor objects
+          const homeTeam = game.homeCompetitor;
+          const awayTeam = game.awayCompetitor;
 
-            let homeTeam = '';
-            let awayTeam = '';
-            let homeScore = 0;
-            let awayScore = 0;
+          if (!homeTeam || !awayTeam) continue;
 
-            if (teamEls.length >= 2) {
-              homeTeam = teamEls[0]?.textContent?.trim() || '';
-              awayTeam = teamEls[1]?.textContent?.trim() || '';
-            }
+          // statusGroup: 2=in progress, 4=finished
+          const statusGroup = game.statusGroup || 0;
+          const isLive = statusGroup === 2;
+          const isFinished = statusGroup === 4;
 
-            if (scoreEls.length >= 2) {
-              homeScore = parseInt(scoreEls[0]?.textContent?.trim() || '0') || 0;
-              awayScore = parseInt(scoreEls[1]?.textContent?.trim() || '0') || 0;
-            } else if (scoreEls.length === 1) {
-              const scoreText = scoreEls[0]?.textContent?.trim() || '';
-              const match = scoreText.match(/(\d+)\s*[-:]\s*(\d+)/);
-              if (match) {
-                homeScore = parseInt(match[1]!) || 0;
-                awayScore = parseInt(match[2]!) || 0;
-              }
-            }
+          // Skip if not live or finished
+          if (!isLive && !isFinished) continue;
 
-            const status = statusEl?.textContent?.trim() || '';
-            const competition = compEl?.textContent?.trim() || 'Unknown';
-
-            if (homeTeam && awayTeam) {
-              const id = `365_${sportName}_${homeTeam.toLowerCase().replace(/\s+/g, '_')}_${idx}`;
-              results.push({
-                id,
-                homeTeam,
-                awayTeam,
-                homeScore,
-                awayScore,
-                status,
-                competition,
-              });
-            }
-          } catch {
-            // Skip failed elements
-          }
-        });
-
-        return results;
-      }, sport);
-
-      for (const match of matches) {
-        const score = this.parseMatch(match);
-        if (score) {
-          scores.set(match.id, score);
-        }
-      }
-
-      logger.info(`365Scores: Retrieved ${scores.size} ${sport} scores`);
-      return scores;
-    } catch (error) {
-      logger.error(`365Scores ${sport} failed`, { error });
-      return scores;
-    }
-  }
-
-  async getFixtures(sport: string = 'football', days = 7): Promise<Array<{
-    externalId: string;
-    homeTeam: string;
-    awayTeam: string;
-    competition: string;
-    startTime: Date;
-    sport: string;
-  }>> {
-    const fixtures: Array<{
-      externalId: string;
-      homeTeam: string;
-      awayTeam: string;
-      competition: string;
-      startTime: Date;
-      sport: string;
-    }> = [];
-
-    const url = this.sportUrls[sport] || this.sportUrls.football;
-
-    try {
-      await this.page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
-
-      await randomDelay(1000, 2000);
-
-      const upcomingMatches = await this.page.evaluate((sportName) => {
-        const results: Array<{
-          homeTeam: string;
-          awayTeam: string;
-          time: string;
-          competition: string;
-        }> = [];
-
-        // Find upcoming games (not started yet)
-        const gameElements = document.querySelectorAll('[class*="game-card"], [class*="upcoming"]');
-
-        gameElements.forEach((el) => {
-          try {
-            const teamEls = el.querySelectorAll('[class*="team-name"]');
-            const timeEl = el.querySelector('[class*="time"], [class*="kickoff"]');
-            const compEl = el.querySelector('[class*="competition"]');
-
-            if (teamEls.length >= 2) {
-              results.push({
-                homeTeam: teamEls[0]?.textContent?.trim() || '',
-                awayTeam: teamEls[1]?.textContent?.trim() || '',
-                time: timeEl?.textContent?.trim() || '',
-                competition: compEl?.textContent?.trim() || 'Unknown',
-              });
-            }
-          } catch {
-            // Skip
-          }
-        });
-
-        return results;
-      }, sport);
-
-      for (const match of upcomingMatches) {
-        if (match.homeTeam && match.awayTeam) {
-          fixtures.push({
-            externalId: `365_${sport}_${match.homeTeam.toLowerCase().replace(/\s+/g, '_')}_${match.awayTeam.toLowerCase().replace(/\s+/g, '_')}`,
-            homeTeam: match.homeTeam,
-            awayTeam: match.awayTeam,
-            competition: match.competition,
-            startTime: this.parseTime(match.time),
-            sport,
+          scrapedEvents.push({
+            homeTeam: homeTeam.name || homeTeam.shortName || '',
+            awayTeam: awayTeam.name || awayTeam.shortName || '',
+            homeScore: homeTeam.score ?? 0,
+            awayScore: awayTeam.score ?? 0,
+            period: this.parsePeriod(game),
+            minute: this.parseMinute(game),
+            isFinished,
+            startTime: game.startTime ? new Date(game.startTime) : undefined,
+            sourceId: String(game.id),
+            sourceName: '365scores',
           });
+        } catch (e) {
+          // Skip malformed games
         }
       }
+
+      if (scrapedEvents.length === 0) {
+        logger.debug(`365Scores: No live/finished ${sportName} events found`);
+        return { scores, unmatchedCount: 0, matchedCount: 0 };
+      }
+
+      logger.debug(`365Scores: Found ${scrapedEvents.length} live/finished ${sportName} events`);
+
+      // Convert our events to DatabaseEvent format for matching
+      const dbEvents = events.map(e => ({
+        id: e.id,
+        homeTeamName: e.homeTeamName,
+        awayTeamName: e.awayTeamName,
+        startTime: e.startTime,
+      }));
+
+      // Match by team names
+      const matches = matchEvents(scrapedEvents, dbEvents, {
+        threshold: 0.7,
+        requireBothTeams: true,
+        timeWindowMs: 12 * 60 * 60 * 1000, // 12 hour window
+      });
+
+      // Convert matches to LiveScore format
+      for (const match of matches) {
+        const scraped = match.scrapedEvent;
+        scores.set(match.dbEvent.id, {
+          eventId: match.dbEvent.id,
+          homeScore: scraped.homeScore ?? 0,
+          awayScore: scraped.awayScore ?? 0,
+          period: scraped.period || 'LIVE',
+          minute: scraped.minute,
+          isFinished: scraped.isFinished ?? false,
+        });
+
+        logger.debug(`365Scores: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
+          `to "${match.dbEvent.homeTeamName} vs ${match.dbEvent.awayTeamName}" ` +
+          `(confidence: ${match.confidence.toFixed(2)})`);
+      }
+
+      const unmatchedCount = scrapedEvents.length - matches.length;
+      return { scores, matchedCount: matches.length, unmatchedCount };
     } catch (error) {
-      logger.error(`365Scores ${sport} fixtures failed`, { error });
-    }
-
-    return fixtures;
-  }
-
-  private parseMatch(match: {
-    id: string;
-    homeTeam: string;
-    awayTeam: string;
-    homeScore: number;
-    awayScore: number;
-    status: string;
-  }): LiveScore | null {
-    try {
-      const status = match.status.toLowerCase();
-
-      let period = 'LIVE';
-      let isFinished = false;
-      let minute: number | undefined;
-
-      if (status.includes('ft') || status.includes('final') || status.includes('ended')) {
-        period = 'FT';
-        isFinished = true;
-      } else if (status.includes('ht') || status.includes('half')) {
-        period = 'HT';
-      } else if (status.includes('1st') || status.includes('1h')) {
-        period = '1H';
-      } else if (status.includes('2nd') || status.includes('2h')) {
-        period = '2H';
-      } else if (status.includes('live') || status.includes('progress')) {
-        period = 'LIVE';
-      } else if (status.includes('ns') || status.includes('scheduled')) {
-        period = 'NS';
-      } else {
-        const minuteMatch = status.match(/(\d+)/);
-        if (minuteMatch) {
-          minute = parseInt(minuteMatch[1]!);
-          period = `${minute}'`;
-        }
-      }
-
-      return {
-        externalId: match.id,
-        homeScore: match.homeScore,
-        awayScore: match.awayScore,
-        period,
-        minute,
-        isFinished,
-      };
-    } catch {
-      return null;
+      logger.debug(`Failed to fetch 365Scores ${sportName} events`, { error });
+      return { scores, matchedCount: 0, unmatchedCount: 0 };
     }
   }
 
-  private parseTime(timeStr: string): Date {
-    const now = new Date();
-    const match = timeStr.match(/(\d{1,2}):(\d{2})/);
-    if (match) {
-      now.setHours(parseInt(match[1]!), parseInt(match[2]!), 0, 0);
+  private parsePeriod(game: any): string {
+    const statusGroup = game.statusGroup || 0;
+    const statusText = game.shortStatusText || game.statusText || '';
+
+    // statusGroup 4 = finished
+    if (statusGroup === 4) return 'FT';
+
+    // Use statusText if available (e.g., "HT", "1st Half", "2nd Half")
+    if (statusText) {
+      const lower = statusText.toLowerCase();
+      if (lower.includes('half time') || lower === 'ht') return 'HT';
+      if (lower.includes('1st') || lower.includes('first')) return '1H';
+      if (lower.includes('2nd') || lower.includes('second')) return '2H';
+      if (lower.includes('extra') || lower === 'et') return 'ET';
+      if (lower.includes('penal') || lower === 'pen') return 'PEN';
     }
-    return now;
+
+    // Check for game time display
+    const gameTime = game.gameTime || game.gameTimeDisplay;
+    if (gameTime && typeof gameTime === 'number' && gameTime > 0) {
+      return `${Math.floor(gameTime)}'`;
+    }
+
+    return 'LIVE';
   }
 
-  getSupportedSports(): string[] {
-    return Object.keys(this.sportUrls);
+  private parseMinute(game: any): number | undefined {
+    const gameTime = game.gameTime;
+    if (typeof gameTime === 'number' && gameTime > 0) {
+      return Math.floor(gameTime);
+    }
+    return undefined;
   }
 }

@@ -229,6 +229,46 @@ export class SmartProxyProvider implements ProxyProvider {
 }
 
 /**
+ * IPRoyal - Cheap residential proxies at $1.75/GB
+ * Low minimum, pay-as-you-go
+ */
+export class IPRoyalProvider implements ProxyProvider {
+  name = 'iproyal';
+  private username: string;
+  private password: string;
+  private country: string;
+
+  constructor(options: {
+    username: string;
+    password: string;
+    country?: string;
+  }) {
+    this.username = options.username;
+    this.password = options.password;
+    this.country = options.country || 'gb';
+  }
+
+  async getProxy(): Promise<ProxyConfig> {
+    // Generate session for sticky IP (optional, helps avoid re-auth)
+    const sessionId = Math.random().toString(36).substring(2, 10);
+
+    // IPRoyal residential proxy format
+    // Password format: password_country-xx_session-xxx_lifetime-5m
+    const passwordWithOptions = `${this.password}_country-${this.country}_session-${sessionId}_lifetime-5m`;
+
+    return {
+      server: 'http://geo.iproyal.com:12321',
+      username: this.username,
+      password: passwordWithOptions,
+      protocol: 'http',
+    };
+  }
+
+  markFailed(proxy: ProxyConfig): void {}
+  markSuccess(proxy: ProxyConfig): void {}
+}
+
+/**
  * PacketStream - CHEAPEST option at $1/GB
  * Peer-to-peer residential proxy network
  */
@@ -343,7 +383,18 @@ export class ProxyManager {
       console.log('Proxy: ScraperAPI enabled (FREE tier: 1000 req/month)');
     }
 
-    // 2. PacketStream - CHEAPEST ($1/GB)
+    // 2. IPRoyal - CHEAP ($1.75/GB, low minimum)
+    if (process.env.IPROYAL_USERNAME && process.env.IPROYAL_PASSWORD) {
+      this.providers.push(new IPRoyalProvider({
+        username: process.env.IPROYAL_USERNAME,
+        password: process.env.IPROYAL_PASSWORD,
+        country: process.env.PROXY_COUNTRY || 'gb',
+      }));
+      this.enabled = true;
+      console.log('Proxy: IPRoyal enabled ($1.75/GB)');
+    }
+
+    // 3. PacketStream - CHEAPEST ($1/GB)
     if (process.env.PACKETSTREAM_API_KEY) {
       this.providers.push(new PacketStreamProvider({
         apiKey: process.env.PACKETSTREAM_API_KEY,
@@ -353,7 +404,7 @@ export class ProxyManager {
       console.log('Proxy: PacketStream enabled ($1/GB)');
     }
 
-    // 3. SmartProxy/Decodo (~$6-8/GB)
+    // 4. SmartProxy/Decodo (~$6-8/GB)
     if (process.env.SMARTPROXY_USERNAME && process.env.SMARTPROXY_PASSWORD) {
       this.providers.push(new SmartProxyProvider({
         username: process.env.SMARTPROXY_USERNAME,
@@ -364,7 +415,7 @@ export class ProxyManager {
       console.log('Proxy: SmartProxy enabled (~$6-8/GB)');
     }
 
-    // 4. Oxylabs (~$8/GB)
+    // 5. Oxylabs (~$8/GB)
     if (process.env.OXYLABS_USERNAME && process.env.OXYLABS_PASSWORD) {
       this.providers.push(new OxylabsProvider({
         username: process.env.OXYLABS_USERNAME,
@@ -375,7 +426,7 @@ export class ProxyManager {
       console.log('Proxy: Oxylabs enabled (~$8/GB)');
     }
 
-    // 5. Bright Data - Premium (~$10-17/GB)
+    // 6. Bright Data - Premium (~$10-17/GB)
     if (process.env.BRIGHTDATA_USERNAME && process.env.BRIGHTDATA_PASSWORD) {
       this.providers.push(new BrightDataProvider({
         username: process.env.BRIGHTDATA_USERNAME,
@@ -386,7 +437,7 @@ export class ProxyManager {
       console.log('Proxy: Bright Data enabled (~$10-17/GB)');
     }
 
-    // 6. Static proxy list (user-provided)
+    // 7. Static proxy list (user-provided)
     if (process.env.PROXY_LIST) {
       const proxies = process.env.PROXY_LIST.split(',').map(p => {
         const [server, username, password] = p.trim().split('|');

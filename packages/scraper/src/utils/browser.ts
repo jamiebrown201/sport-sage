@@ -40,6 +40,7 @@ export interface BrowserConfig {
   headless?: boolean;
   timeout?: number;
   proxy?: string; // e.g., "http://proxy:8080" or "socks5://proxy:1080"
+  useProxy?: boolean; // Set to true to use rotating proxy, false to skip (default: false)
 }
 
 // Rate limiting - track requests per domain
@@ -116,12 +117,12 @@ export async function createPage(browser: Browser, config: BrowserConfig = {}): 
     isMobile: false,
   };
 
-  // Add proxy - prefer auto-rotation, fall back to manual config
+  // Add proxy - only when explicitly requested via useProxy: true
   let currentProxy: ProxyConfig | null = null;
   const proxyManager = getProxyManager();
 
-  if (proxyManager.isEnabled() && !config.proxy) {
-    // Use rotating proxy from manager
+  if (config.useProxy && proxyManager.isEnabled()) {
+    // Use rotating proxy from manager (only when useProxy is explicitly true)
     currentProxy = await proxyManager.getProxy();
     if (currentProxy) {
       contextOptions.proxy = formatProxyForPlaywright(currentProxy);
@@ -132,13 +133,27 @@ export async function createPage(browser: Browser, config: BrowserConfig = {}): 
     contextOptions.proxy = { server: config.proxy };
   }
 
-  const context = await browser.newContext(contextOptions);
+  let context: BrowserContext;
+  try {
+    context = await browser.newContext(contextOptions);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to create browser context: ${errorMessage}`);
+    // If proxy context fails, try without proxy as fallback
+    if (currentProxy) {
+      console.log('Retrying without proxy...');
+      delete contextOptions.proxy;
+      context = await browser.newContext(contextOptions);
+    } else {
+      throw error;
+    }
+  }
 
   const page = await context.newPage();
-  page.setDefaultTimeout(config.timeout ?? 30000);
+  page.setDefaultTimeout(config.timeout ?? 45000); // Longer default timeout for proxy
 
   // Track proxy for this page
-  if (currentProxy) {
+  if (currentProxy && contextOptions.proxy) {
     pageProxyMap.set(page, currentProxy);
   }
 

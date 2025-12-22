@@ -1,12 +1,12 @@
 import type { Browser, Page } from 'playwright-core';
 import { logger } from '../utils/logger';
-import { FlashscoreLiveScoresScraper, type LiveScore } from './flashscore/live-scores';
+import { FlashscoreLiveScoresScraper } from './flashscore/live-scores';
+import { LiveScoreApiScraper } from './livescore/api-live-scores';
 import { SofascoreLiveScoresScraper } from './sofascore/live-scores';
-import { FotMobLiveScoresScraper } from './fotmob/live-scores';
-import { LiveScoreLiveScoresScraper } from './livescore/live-scores';
 import { ESPNLiveScoresScraper } from './espn/live-scores';
 import { Scores365LiveScoresScraper } from './365scores/live-scores';
-import { launchBrowser, createPage, markPageProxySuccess, markPageProxyFailed } from '../utils/browser';
+import { FotMobLiveScoresScraper } from './fotmob/live-scores';
+import { launchBrowser, createPage } from '../utils/browser';
 import { getProxyManager } from '../utils/proxy-manager';
 import {
   recordSuccess,
@@ -15,6 +15,7 @@ import {
   checkAndAlertBotDetection,
   getSourceHealth,
 } from '../utils/bot-detection';
+import type { LiveScoresScraper, EventToMatch, LiveScore, ScrapeResult } from './types';
 
 export interface ScraperSource {
   name: string;
@@ -23,86 +24,92 @@ export interface ScraperSource {
   scraper: (page: Page) => LiveScoresScraper;
 }
 
-interface LiveScoresScraper {
-  getLiveScores(externalIds: string[]): Promise<Map<string, LiveScore>>;
-}
-
 /**
- * Multi-source live scores orchestrator with ROTATION
+ * Multi-source live scores orchestrator
  *
- * Sources (tested 2024-12-21):
- * - SofaScore API: WORKS without proxy (552 live events) ✅
- * - ESPN: WORKS without proxy (huge data) ✅
- * - 365Scores: WORKS without proxy (63 items) ✅
- * - Flashscore: Original source, blocked without proxy but try occasionally
- * - FotMob: BLOCKED (404)
- * - LiveScore: BLOCKED
+ * Sources (updated 2024-12-22):
+ *
+ * WORKING FREE SOURCES (No proxy needed):
+ * - LiveScore API: WORKS ✅ PRIMARY - public API, works from AWS IPs
+ * - ESPN API: WORKS ✅ - public API, multi-sport (football, basketball, tennis, hockey, cricket)
+ * - 365Scores API: WORKS ✅ - public API, multi-sport (football, basketball, tennis, hockey, baseball)
+ *
+ * BLOCKED FREE SOURCES:
+ * - SofaScore API: ❌ BLOCKED - 403 Forbidden from AWS IPs
+ * - FotMob API: ❌ BLOCKED - Returns 404 HTML page, API no longer accessible
+ *
+ * WORKING PROXY SOURCES:
+ * - Flashscore: WORKS ✅ - requires proxy, uses DOM structure parsing (not CSS classes)
  *
  * Strategy:
- * 1. ROTATE between free working sources to avoid detection
- * 2. Track last used time to spread load
- * 3. Fall back to proxy sources if needed
+ * 1. Try FREE API sources first (priority 1-5, no proxy needed)
+ * 2. If FREE sources get 80%+ coverage, stop (no need to use proxy quota)
+ * 3. Fall back to proxy sources only when needed (priority 10+)
+ *
+ * Matching Strategy:
+ * All scrapers now match by team names instead of source-specific IDs.
+ * This makes the system flexible and source-agnostic.
  */
 export class LiveScoresOrchestrator {
   private sources: ScraperSource[] = [
-    // === FREE WORKING SOURCES (rotate between these) ===
+    // === FREE API SOURCES - Priority 1-5 ===
+    {
+      name: 'livescore',
+      priority: 1,
+      needsProxy: false, // Uses public API, works from AWS IPs
+      scraper: (page) => new LiveScoreApiScraper(page),
+    },
     {
       name: 'sofascore',
-      priority: 1,
-      needsProxy: false,
+      priority: 2,
+      needsProxy: false, // Uses public API - may be blocked, will test
       scraper: (page) => new SofascoreLiveScoresScraper(page),
     },
     {
       name: 'espn',
-      priority: 1, // Same priority = rotation candidates
-      needsProxy: false,
+      priority: 3,
+      needsProxy: false, // Uses public API, works from AWS IPs
       scraper: (page) => new ESPNLiveScoresScraper(page),
     },
     {
       name: '365scores',
-      priority: 1, // Same priority = rotation candidates
-      needsProxy: false,
+      priority: 4,
+      needsProxy: false, // Uses public API, works from AWS IPs
       scraper: (page) => new Scores365LiveScoresScraper(page),
     },
-    // === TRY OCCASIONALLY (might work without proxy sometimes) ===
-    {
-      name: 'flashscore',
-      priority: 2, // Original source - try occasionally
-      needsProxy: false, // Try without proxy first, might get lucky
-      scraper: (page) => new FlashscoreLiveScoresScraper(page),
-    },
-    // === BLOCKED SOURCES (only with proxy) ===
     {
       name: 'fotmob',
-      priority: 3,
-      needsProxy: true,
+      priority: 5,
+      needsProxy: false, // Uses public API, FOOTBALL ONLY
       scraper: (page) => new FotMobLiveScoresScraper(page),
     },
+    // === PROXY BACKUP SOURCES - Priority 10+ ===
+    // Only used when free sources fail or for periodic health checks
     {
-      name: 'livescore',
-      priority: 3,
-      needsProxy: true,
-      scraper: (page) => new LiveScoreLiveScoresScraper(page),
+      name: 'flashscore',
+      priority: 10,
+      needsProxy: true, // Blocked from AWS IPs, uses obfuscated CSS
+      scraper: (page) => new FlashscoreLiveScoresScraper(page),
     },
   ];
 
   // Track when each source was last used (for rotation)
   private lastUsed: Record<string, number> = {
+    livescore: 0,
     sofascore: 0,
     espn: 0,
     '365scores': 0,
-    flashscore: 0,
     fotmob: 0,
-    livescore: 0,
+    flashscore: 0,
   };
 
   private stats = {
+    livescore: { success: 0, fail: 0 },
     sofascore: { success: 0, fail: 0 },
     espn: { success: 0, fail: 0 },
     '365scores': { success: 0, fail: 0 },
-    flashscore: { success: 0, fail: 0 },
     fotmob: { success: 0, fail: 0 },
-    livescore: { success: 0, fail: 0 },
+    flashscore: { success: 0, fail: 0 },
   };
 
   /**
@@ -133,7 +140,7 @@ export class LiveScoresOrchestrator {
 
   async getLiveScores(
     browser: Browser,
-    externalIds: string[]
+    events: EventToMatch[]
   ): Promise<{
     scores: Map<string, LiveScore>;
     sourcesUsed: string[];
@@ -141,7 +148,7 @@ export class LiveScoresOrchestrator {
   }> {
     const allScores = new Map<string, LiveScore>();
     const sourcesUsed: string[] = [];
-    const remainingIds = new Set(externalIds);
+    const remainingEventIds = new Set(events.map(e => e.id));
 
     // Use ROTATED sources (spreads load, avoids detection)
     const rotatedSources = this.getRotatedSources();
@@ -149,7 +156,7 @@ export class LiveScoresOrchestrator {
     logger.info(`Source rotation order: ${rotatedSources.map(s => s.name).join(' → ')}`);
 
     for (const source of rotatedSources) {
-      if (remainingIds.size === 0) {
+      if (remainingEventIds.size === 0) {
         break; // Got all scores
       }
 
@@ -166,51 +173,64 @@ export class LiveScoresOrchestrator {
         continue;
       }
 
+      let page: Page | null = null;
+      let proxyBrowser: Browser | null = null;
+
       try {
-        logger.info(`Trying ${source.name} for ${remainingIds.size} events...`);
+        logger.info(`Trying ${source.name} for ${remainingEventIds.size} events...`);
 
         // Mark this source as used NOW (for rotation tracking)
         this.lastUsed[source.name] = Date.now();
 
-        // Create page (with proxy if needed)
-        const page = await createPage(browser);
+        // Create page - use separate browser for proxy to avoid context conflicts in Lambda
+        if (source.needsProxy) {
+          // Launch separate browser for proxy sources
+          proxyBrowser = await launchBrowser();
+          page = await createPage(proxyBrowser, { useProxy: true });
+          logger.debug(`Created separate browser for ${source.name} with proxy`);
+        } else {
+          // Use shared browser for non-proxy sources
+          page = await createPage(browser, { useProxy: false });
+        }
 
-        try {
-          const scraper = source.scraper(page);
-          const scores = await scraper.getLiveScores(Array.from(remainingIds));
+        const scraper = source.scraper(page);
 
-          if (scores.size > 0) {
+        // Filter events to only those we still need scores for
+        const eventsToMatch = events.filter(e => remainingEventIds.has(e.id));
+        const result = await scraper.getLiveScores(eventsToMatch);
+
+        if (result.scores.size > 0) {
+          if (source.name in this.stats) {
             this.stats[source.name as keyof typeof this.stats].success++;
-            sourcesUsed.push(source.name);
-            markPageProxySuccess(page);
-
-            // Record success for bot detection
-            recordSuccess(source.name);
-
-            // Add to results and remove from remaining
-            for (const [id, score] of scores) {
-              allScores.set(id, score);
-              remainingIds.delete(id);
-            }
-
-            logger.info(`${source.name}: Got ${scores.size} scores, ${remainingIds.size} remaining`);
-
-            // If we got good results from a free source, we can stop
-            // (don't hammer multiple sources unnecessarily)
-            if (!source.needsProxy && allScores.size >= externalIds.length * 0.8) {
-              logger.info(`Got 80%+ coverage from ${source.name}, stopping rotation`);
-              break;
-            }
-          } else {
-            // No scores could mean blocking or just no live events
-            logger.debug(`${source.name}: No scores found`);
-            recordFailure(source.name, 'No data returned');
           }
-        } finally {
-          await page.context().close();
+          sourcesUsed.push(source.name);
+
+          // Record success for bot detection
+          recordSuccess(source.name);
+
+          // Add to results and remove from remaining
+          for (const [id, score] of result.scores) {
+            allScores.set(id, score);
+            remainingEventIds.delete(id);
+          }
+
+          logger.info(`${source.name}: Got ${result.scores.size} scores (matched: ${result.matchedCount}, unmatched: ${result.unmatchedCount}), ${remainingEventIds.size} remaining`);
+
+          // If we got good results from a free source, we can stop
+          // (don't hammer multiple sources unnecessarily)
+          if (!source.needsProxy && allScores.size >= events.length * 0.8) {
+            logger.info(`Got 80%+ coverage from ${source.name}, stopping rotation`);
+            break;
+          }
+        } else {
+          // No scores could mean blocking or just no live events
+          logger.debug(`${source.name}: No scores found`);
+          recordFailure(source.name, 'No data returned');
         }
       } catch (error) {
-        this.stats[source.name as keyof typeof this.stats].fail++;
+        if (source.name in this.stats) {
+          this.stats[source.name as keyof typeof this.stats].fail++;
+        }
         const errorMessage = error instanceof Error ? error.message : String(error);
 
         // Record failure for bot detection
@@ -220,6 +240,16 @@ export class LiveScoresOrchestrator {
         await checkAndAlertBotDetection(source.name);
 
         logger.warn(`${source.name} failed:`, { error: errorMessage });
+      } finally {
+        // Close page
+        if (page) {
+          await page.close().catch(() => {});
+        }
+        // Close proxy browser if we created one
+        if (proxyBrowser) {
+          await proxyBrowser.close().catch(() => {});
+          logger.debug('Closed proxy browser');
+        }
       }
     }
 
@@ -269,15 +299,15 @@ export class LiveScoresOrchestrator {
  * trying multiple sources and falling back appropriately.
  */
 export async function getMultiSourceLiveScores(
-  externalIds: string[]
+  events: EventToMatch[]
 ): Promise<Map<string, LiveScore>> {
   const browser = await launchBrowser();
 
   try {
     const orchestrator = new LiveScoresOrchestrator();
-    const result = await orchestrator.getLiveScores(browser, externalIds);
+    const result = await orchestrator.getLiveScores(browser, events);
 
-    logger.info(`Multi-source live scores: ${result.scores.size}/${externalIds.length} found`);
+    logger.info(`Multi-source live scores: ${result.scores.size}/${events.length} found`);
     logger.info(`Sources used: ${result.sourcesUsed.join(', ') || 'none'}`);
 
     return result.scores;
@@ -285,3 +315,6 @@ export async function getMultiSourceLiveScores(
     await browser.close();
   }
 }
+
+// Re-export types for convenience
+export type { LiveScore, EventToMatch, ScrapeResult } from './types';

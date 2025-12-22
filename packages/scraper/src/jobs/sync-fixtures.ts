@@ -21,7 +21,8 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
 
   try {
     browser = await launchBrowser();
-    const page = await createPage(browser);
+    // Use proxy for Flashscore - blocked from AWS IPs
+    const page = await createPage(browser, { useProxy: true });
     const scraper = new FlashscoreFixturesScraper(page);
     const db = getDb();
 

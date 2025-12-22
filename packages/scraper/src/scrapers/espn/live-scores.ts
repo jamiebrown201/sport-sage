@@ -1,291 +1,227 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
 import { randomDelay, retryWithBackoff } from '../../utils/browser';
-
-export interface LiveScore {
-  externalId: string;
-  homeScore: number;
-  awayScore: number;
-  period: string;
-  minute?: number;
-  isFinished: boolean;
-}
+import { matchEvents, type ScrapedEvent } from '../../utils/team-matcher';
+import type { LiveScoresScraper, EventToMatch, ScrapeResult, LiveScore } from '../types';
 
 /**
- * ESPN scraper - FREE, works without proxy
+ * ESPN API scraper - FREE, works without proxy
  *
- * ESPN has low protection and provides good football data.
- * One of the best free sources available.
+ * ESPN has a public API that's accessible from AWS IPs.
+ * Uses the scoreboard API endpoint for live scores.
+ *
+ * Supports: football (soccer), basketball, tennis
  */
-export class ESPNLiveScoresScraper {
+export class ESPNLiveScoresScraper implements LiveScoresScraper {
   constructor(private page: Page) {}
 
-  async getLiveScores(externalIds: string[]): Promise<Map<string, LiveScore>> {
+  // Sport slug mapping to ESPN sport codes
+  private readonly sportMap: Record<string, string> = {
+    football: 'soccer',
+    basketball: 'basketball',
+    tennis: 'tennis',
+    ice_hockey: 'hockey',
+    cricket: 'cricket',
+  };
+
+  async getLiveScores(events: EventToMatch[]): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
 
-    if (externalIds.length === 0) {
-      return scores;
+    if (events.length === 0) {
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
 
-    logger.info(`ESPN: Fetching live scores`);
+    logger.info(`ESPN: Looking for scores for ${events.length} events`);
+
+    try {
+      // Group events by sport
+      const sportGroups = new Map<string, EventToMatch[]>();
+      for (const event of events) {
+        const sport = event.sportSlug;
+        if (!sportGroups.has(sport)) {
+          sportGroups.set(sport, []);
+        }
+        sportGroups.get(sport)!.push(event);
+      }
+
+      let totalMatched = 0;
+      let totalUnmatched = 0;
+
+      // Fetch for each sport
+      for (const [sport, sportEvents] of sportGroups) {
+        const espnSport = this.sportMap[sport];
+        if (!espnSport) {
+          logger.debug(`ESPN: No mapping for sport ${sport}`);
+          continue;
+        }
+
+        const result = await this.fetchAndMatchSport(espnSport, sportEvents);
+        for (const [id, score] of result.scores) {
+          scores.set(id, score);
+        }
+        totalMatched += result.matchedCount;
+        totalUnmatched += result.unmatchedCount;
+      }
+
+      logger.info(`ESPN: Matched ${totalMatched} events, ${totalUnmatched} unmatched`);
+      return { scores, matchedCount: totalMatched, unmatchedCount: totalUnmatched };
+    } catch (error) {
+      logger.error('ESPN live scores failed', { error });
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
+    }
+  }
+
+  private async fetchAndMatchSport(
+    espnSport: string,
+    events: EventToMatch[]
+  ): Promise<ScrapeResult> {
+    const scores = new Map<string, LiveScore>();
+
+    // ESPN API endpoint for live scores
+    // Format: https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard
+    // For soccer, league is typically 'all' or specific like 'eng.1'
+    const apiUrl = espnSport === 'soccer'
+      ? 'https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard'
+      : `https://site.api.espn.com/apis/site/v2/sports/${espnSport}/scoreboard`;
 
     try {
       await retryWithBackoff(async () => {
-        await this.page.goto('https://www.espn.com/soccer/scoreboard', {
+        await this.page.goto(apiUrl, {
           waitUntil: 'domcontentloaded',
-          timeout: 30000,
+          timeout: 15000,
         });
       });
 
-      await randomDelay(1000, 2000);
+      await randomDelay(200, 400);
 
-      // Wait for scores to load
-      await this.page.waitForSelector('[class*="ScoreCell"], [class*="scoreboard"]', {
-        timeout: 10000,
-      }).catch(() => {
-        logger.debug('ESPN: Waiting for content...');
-      });
+      const bodyText = await this.page.evaluate(() => document.body.innerText);
+      const data = JSON.parse(bodyText);
 
-      // Extract match data
-      const matches = await this.page.evaluate(() => {
-        const results: Array<{
-          homeTeam: string;
-          awayTeam: string;
-          homeScore: number;
-          awayScore: number;
-          status: string;
-          gameId: string;
-        }> = [];
+      // Parse ESPN API response
+      const scrapedEvents: ScrapedEvent[] = [];
 
-        // Try various ESPN selectors
-        const scoreboardItems = document.querySelectorAll(
-          '[class*="Scoreboard"], [class*="ScoreCell"], [class*="game"]'
-        );
+      // ESPN structure: { events: [...] } or { leagues: [{ events: [...] }] }
+      const espnEvents = data.events || [];
 
-        scoreboardItems.forEach((item) => {
-          try {
-            // Look for team names
-            const teamEls = item.querySelectorAll('[class*="TeamName"], [class*="team-name"]');
-            const scoreEls = item.querySelectorAll('[class*="Score"], [class*="score"]');
-            const statusEl = item.querySelector('[class*="StatusText"], [class*="time"], [class*="status"]');
-
-            if (teamEls.length >= 2) {
-              const homeTeam = teamEls[0]?.textContent?.trim() || '';
-              const awayTeam = teamEls[1]?.textContent?.trim() || '';
-
-              let homeScore = 0;
-              let awayScore = 0;
-
-              if (scoreEls.length >= 2) {
-                homeScore = parseInt(scoreEls[0]?.textContent?.trim() || '0') || 0;
-                awayScore = parseInt(scoreEls[1]?.textContent?.trim() || '0') || 0;
-              }
-
-              const status = statusEl?.textContent?.trim() || '';
-
-              // Generate ID
-              const gameId = `espn_${homeTeam.toLowerCase().replace(/\s+/g, '_')}_${awayTeam.toLowerCase().replace(/\s+/g, '_')}`;
-
-              if (homeTeam && awayTeam) {
-                results.push({
-                  homeTeam,
-                  awayTeam,
-                  homeScore,
-                  awayScore,
-                  status,
-                  gameId,
-                });
-              }
-            }
-          } catch {
-            // Skip failed elements
-          }
-        });
-
-        return results;
-      });
-
-      // Match with our external IDs
-      for (const match of matches) {
-        const matchingId = this.findMatchingId(match, externalIds);
-        if (matchingId) {
-          const score = this.parseMatch(match, matchingId);
-          if (score) {
-            scores.set(matchingId, score);
+      // Also check leagues structure
+      if (data.leagues) {
+        for (const league of data.leagues) {
+          if (league.events) {
+            espnEvents.push(...league.events);
           }
         }
       }
 
-      logger.info(`ESPN: Retrieved ${scores.size} live/finished scores`);
-      return scores;
-    } catch (error) {
-      logger.error('ESPN live scores failed', { error });
-      return scores;
-    }
-  }
+      for (const event of espnEvents) {
+        try {
+          const competitors = event.competitions?.[0]?.competitors || [];
+          if (competitors.length < 2) continue;
 
-  async getFixtures(days = 7): Promise<Array<{
-    externalId: string;
-    homeTeam: string;
-    awayTeam: string;
-    competition: string;
-    startTime: Date;
-  }>> {
-    const fixtures: Array<{
-      externalId: string;
-      homeTeam: string;
-      awayTeam: string;
-      competition: string;
-      startTime: Date;
-    }> = [];
+          // ESPN uses 'home' field to identify home/away
+          const homeTeam = competitors.find((c: any) => c.homeAway === 'home');
+          const awayTeam = competitors.find((c: any) => c.homeAway === 'away');
 
-    try {
-      for (let dayOffset = 0; dayOffset < days; dayOffset++) {
-        const date = new Date();
-        date.setDate(date.getDate() + dayOffset);
-        const dateStr = date.toISOString().split('T')[0]!.replace(/-/g, '');
+          if (!homeTeam || !awayTeam) continue;
 
-        await this.page.goto(
-          `https://www.espn.com/soccer/schedule/_/date/${dateStr}`,
-          { waitUntil: 'domcontentloaded', timeout: 30000 }
-        );
+          const status = event.status || event.competitions?.[0]?.status || {};
+          const isLive = status.type?.state === 'in' || status.type?.name === 'STATUS_IN_PROGRESS';
+          const isFinished = status.type?.state === 'post' || status.type?.completed === true;
 
-        await randomDelay(500, 1000);
+          // Skip if not live or finished
+          if (!isLive && !isFinished) continue;
 
-        const dayFixtures = await this.page.evaluate(() => {
-          const results: Array<{
-            homeTeam: string;
-            awayTeam: string;
-            time: string;
-            competition: string;
-          }> = [];
-
-          const rows = document.querySelectorAll(
-            '[class*="Schedule"], [class*="schedule-row"], [class*="game"]'
-          );
-
-          rows.forEach((row) => {
-            try {
-              const teamEls = row.querySelectorAll('[class*="team"]');
-              const timeEl = row.querySelector('[class*="time"], [class*="date"]');
-              const compEl = row.querySelector('[class*="league"], [class*="competition"]');
-
-              if (teamEls.length >= 2) {
-                results.push({
-                  homeTeam: teamEls[0]?.textContent?.trim() || '',
-                  awayTeam: teamEls[1]?.textContent?.trim() || '',
-                  time: timeEl?.textContent?.trim() || '',
-                  competition: compEl?.textContent?.trim() || 'Football',
-                });
-              }
-            } catch {
-              // Skip
-            }
+          scrapedEvents.push({
+            homeTeam: homeTeam.team?.displayName || homeTeam.team?.name || '',
+            awayTeam: awayTeam.team?.displayName || awayTeam.team?.name || '',
+            homeScore: parseInt(homeTeam.score) || 0,
+            awayScore: parseInt(awayTeam.score) || 0,
+            period: this.parsePeriod(status),
+            minute: this.parseMinute(status),
+            isFinished,
+            startTime: event.date ? new Date(event.date) : undefined,
+            sourceId: event.id,
+            sourceName: 'espn',
           });
+        } catch (e) {
+          // Skip malformed events
+        }
+      }
 
-          return results;
+      if (scrapedEvents.length === 0) {
+        logger.debug(`ESPN: No live/finished ${espnSport} events found`);
+        return { scores, unmatchedCount: 0, matchedCount: 0 };
+      }
+
+      logger.debug(`ESPN: Found ${scrapedEvents.length} live/finished ${espnSport} events`);
+
+      // Convert our events to DatabaseEvent format for matching
+      const dbEvents = events.map(e => ({
+        id: e.id,
+        homeTeamName: e.homeTeamName,
+        awayTeamName: e.awayTeamName,
+        startTime: e.startTime,
+      }));
+
+      // Match by team names
+      const matches = matchEvents(scrapedEvents, dbEvents, {
+        threshold: 0.7,
+        requireBothTeams: true,
+        timeWindowMs: 12 * 60 * 60 * 1000, // 12 hour window
+      });
+
+      // Convert matches to LiveScore format
+      for (const match of matches) {
+        const scraped = match.scrapedEvent;
+        scores.set(match.dbEvent.id, {
+          eventId: match.dbEvent.id,
+          homeScore: scraped.homeScore ?? 0,
+          awayScore: scraped.awayScore ?? 0,
+          period: scraped.period || 'LIVE',
+          minute: scraped.minute,
+          isFinished: scraped.isFinished ?? false,
         });
 
-        for (const match of dayFixtures) {
-          if (match.homeTeam && match.awayTeam) {
-            fixtures.push({
-              externalId: `espn_${match.homeTeam.toLowerCase().replace(/\s+/g, '_')}_${match.awayTeam.toLowerCase().replace(/\s+/g, '_')}`,
-              homeTeam: match.homeTeam,
-              awayTeam: match.awayTeam,
-              competition: match.competition,
-              startTime: this.parseTime(match.time, date),
-            });
-          }
-        }
+        logger.debug(`ESPN: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
+          `to "${match.dbEvent.homeTeamName} vs ${match.dbEvent.awayTeamName}" ` +
+          `(confidence: ${match.confidence.toFixed(2)})`);
       }
+
+      const unmatchedCount = scrapedEvents.length - matches.length;
+      return { scores, matchedCount: matches.length, unmatchedCount };
     } catch (error) {
-      logger.error('ESPN fixtures failed', { error });
-    }
-
-    return fixtures;
-  }
-
-  private findMatchingId(
-    match: { homeTeam: string; awayTeam: string; gameId: string },
-    externalIds: string[]
-  ): string | null {
-    // Check for ESPN IDs first
-    if (externalIds.includes(match.gameId)) {
-      return match.gameId;
-    }
-
-    const homeTeam = match.homeTeam.toLowerCase();
-    const awayTeam = match.awayTeam.toLowerCase();
-
-    // Try fuzzy matching
-    for (const externalId of externalIds) {
-      const idLower = externalId.toLowerCase();
-      if (
-        idLower.includes(homeTeam.substring(0, 4)) ||
-        idLower.includes(awayTeam.substring(0, 4))
-      ) {
-        return externalId;
-      }
-    }
-
-    return null;
-  }
-
-  private parseMatch(
-    match: {
-      homeTeam: string;
-      awayTeam: string;
-      homeScore: number;
-      awayScore: number;
-      status: string;
-    },
-    externalId: string
-  ): LiveScore | null {
-    try {
-      const status = match.status.toLowerCase();
-
-      let period = 'LIVE';
-      let isFinished = false;
-      let minute: number | undefined;
-
-      if (status.includes('ft') || status.includes('final')) {
-        period = 'FT';
-        isFinished = true;
-      } else if (status.includes('ht') || status.includes('half')) {
-        period = 'HT';
-      } else if (status.includes('1st') || status.includes('first')) {
-        period = '1H';
-      } else if (status.includes('2nd') || status.includes('second')) {
-        period = '2H';
-      } else {
-        const minuteMatch = status.match(/(\d+)/);
-        if (minuteMatch) {
-          minute = parseInt(minuteMatch[1]!);
-          period = `${minute}'`;
-        }
-      }
-
-      return {
-        externalId,
-        homeScore: match.homeScore,
-        awayScore: match.awayScore,
-        period,
-        minute,
-        isFinished,
-      };
-    } catch {
-      return null;
+      logger.debug(`Failed to fetch ESPN ${espnSport} events`, { error });
+      return { scores, matchedCount: 0, unmatchedCount: 0 };
     }
   }
 
-  private parseTime(timeStr: string, date: Date): Date {
-    const result = new Date(date);
+  private parsePeriod(status: any): string {
+    const type = status.type?.name || status.type?.description || '';
+    const period = status.period || 0;
 
-    const match = timeStr.match(/(\d{1,2}):(\d{2})/);
-    if (match) {
-      result.setHours(parseInt(match[1]!), parseInt(match[2]!), 0, 0);
+    if (type.includes('FINAL') || type.includes('STATUS_FINAL')) return 'FT';
+    if (type.includes('HALFTIME')) return 'HT';
+    if (type.includes('IN_PROGRESS') || type.includes('STATUS_IN_PROGRESS')) {
+      if (period === 1) return '1H';
+      if (period === 2) return '2H';
+      return 'LIVE';
     }
 
-    return result;
+    // Check displayClock for minute
+    const clock = status.displayClock || '';
+    if (clock && clock !== '0:00') {
+      return clock;
+    }
+
+    return 'LIVE';
+  }
+
+  private parseMinute(status: any): number | undefined {
+    const clock = status.displayClock || '';
+    // ESPN shows time as "45:00" or "90+3"
+    const minuteMatch = clock.match(/^(\d+)/);
+    if (minuteMatch) {
+      return parseInt(minuteMatch[1]);
+    }
+    return undefined;
   }
 }

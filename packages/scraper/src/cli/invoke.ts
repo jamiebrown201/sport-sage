@@ -105,12 +105,30 @@ const JOBS = {
     const { LiveScoresOrchestrator } = await import('../scrapers/live-scores-orchestrator');
 
     console.log('\n=== Live Scores Rotation Test ===\n');
-    console.log('Testing source rotation with sample IDs...\n');
+    console.log('Testing source rotation with sample events...\n');
+
+    // Sample events for testing (these are popular teams that are likely to have live games)
+    const testEvents = [
+      {
+        id: 'test-1',
+        homeTeamName: 'Manchester United',
+        awayTeamName: 'Liverpool',
+        startTime: new Date(),
+        sportSlug: 'football',
+      },
+      {
+        id: 'test-2',
+        homeTeamName: 'Arsenal',
+        awayTeamName: 'Chelsea',
+        startTime: new Date(),
+        sportSlug: 'football',
+      },
+    ];
 
     const browser = await launchBrowser();
     try {
       const orchestrator = new LiveScoresOrchestrator();
-      const result = await orchestrator.getLiveScores(browser, ['test_football_1', 'test_football_2']);
+      const result = await orchestrator.getLiveScores(browser, testEvents);
 
       console.log('\nResults:');
       console.log(`- Scores found: ${result.scores.size}`);

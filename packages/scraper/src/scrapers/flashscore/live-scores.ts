@@ -1,206 +1,334 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
-import { retryWithBackoff, randomDelay } from '../../utils/browser';
+import { randomDelay } from '../../utils/browser';
+import { matchEvents, type ScrapedEvent } from '../../utils/team-matcher';
+import type { LiveScoresScraper, EventToMatch, ScrapeResult, LiveScore } from '../types';
 
-export interface LiveScore {
-  externalId: string;
-  homeScore: number;
-  awayScore: number;
-  period: string;
-  minute?: number;
-  isFinished: boolean;
-}
-
-export class FlashscoreLiveScoresScraper {
+/**
+ * Flashscore live scores scraper
+ *
+ * Requires residential proxy to access from AWS IPs.
+ * Matches events by team names, not source-specific IDs.
+ */
+export class FlashscoreLiveScoresScraper implements LiveScoresScraper {
   constructor(private page: Page) {}
 
-  async getLiveScores(externalIds: string[]): Promise<Map<string, LiveScore>> {
+  async getLiveScores(events: EventToMatch[]): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
 
-    if (externalIds.length === 0) {
-      return scores;
+    if (events.length === 0) {
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
 
-    // Normalize external IDs - strip any g_X_ prefixes for comparison
-    const normalizedIds = new Set(
-      externalIds.map(id => id.replace(/^g_\d+_/, ''))
-    );
-
-    // Also keep original IDs for direct matching
-    const originalIds = new Set(externalIds);
-
-    logger.info(`Fetching live scores for ${externalIds.length} events`);
+    logger.info(`Flashscore: Looking for scores for ${events.length} events`);
 
     try {
       // Navigate to live scores page
-      await retryWithBackoff(async () => {
-        await this.page.goto('https://www.flashscore.com/live/', {
-          waitUntil: 'networkidle',
-        });
+      // Use 'load' instead of 'networkidle' as proxy connections can be slow
+      // Flashscore is JS-heavy but initial content loads quickly
+      logger.debug('Flashscore: Starting navigation...');
+
+      await this.page.goto('https://www.flashscore.com/', {
+        waitUntil: 'load',
+        timeout: 45000, // Longer timeout for proxy connections
       });
+
+      logger.debug('Flashscore: Page loaded, waiting for content...');
 
       // Random delay to appear more human-like
-      await randomDelay(500, 1500);
+      await randomDelay(1500, 2500);
 
-      // Wait for events to load
-      await this.page.waitForSelector('.event__match', { timeout: 10000 }).catch(() => {
-        logger.debug('No live matches found');
+      // Wait for match containers to load (Flashscore uses divs with event__ prefix)
+      // Try multiple possible selectors as they change their structure
+      const matchSelector = '.event__match, [class*="event__match"], .sportName, [class*="sportName"]';
+
+      logger.debug('Flashscore: Waiting for match elements...');
+      await this.page.waitForSelector(matchSelector, { timeout: 20000 }).catch(() => {
+        logger.warn('Flashscore: Timeout waiting for match elements');
       });
 
-      // Another small delay before scraping
-      await randomDelay(300, 800);
+      // Extra wait for JS to fully render
+      await randomDelay(2000, 3000);
 
-      // Get all live matches
-      const matches = await this.page.$$('.event__match--live, .event__match--onlyLive');
+      // Debug: log what we can see on the page
+      const pageContent = await this.page.content();
+      const hasEventMatch = pageContent.includes('event__match');
+      const hasSportName = pageContent.includes('sportName');
+      const pageTitle = await this.page.title();
+      const bodyLength = pageContent.length;
 
+      logger.info(`Flashscore: Page loaded - title: "${pageTitle}", body: ${bodyLength} chars, event__match: ${hasEventMatch}, sportName: ${hasSportName}`);
+
+      // Get all matches - try multiple selector patterns
+      let allMatches = await this.page.$$('.event__match');
+      logger.info(`Flashscore: selector '.event__match' found ${allMatches.length} elements`);
+
+      if (allMatches.length === 0) {
+        // Try alternative selectors
+        allMatches = await this.page.$$('[class*="event__match"]');
+        logger.info(`Flashscore: selector '[class*="event__match"]' found ${allMatches.length} elements`);
+      }
+
+      if (allMatches.length === 0) {
+        // Try even broader selector
+        allMatches = await this.page.$$('div[id^="g_1_"]');
+        logger.info(`Flashscore: selector 'div[id^="g_1_"]' found ${allMatches.length} elements`);
+      }
+
+      if (allMatches.length === 0) {
+        // Try to find ANY divs to understand the page structure
+        const allDivs = await this.page.$$('div');
+        logger.info(`Flashscore: Total divs on page: ${allDivs.length}`);
+
+        // Check for common Flashscore patterns
+        const sportNameElements = await this.page.$$('.sportName');
+        logger.info(`Flashscore: '.sportName' found ${sportNameElements.length} elements`);
+
+        // Check if blocked
+        const blockedContent = pageContent.includes('blocked') ||
+          pageContent.includes('captcha') ||
+          pageContent.includes('challenge');
+        logger.warn(`Flashscore: No matches found. Possible blocking: ${blockedContent}`);
+
+        return { scores, unmatchedCount: 0, matchedCount: 0 };
+      }
+
+      logger.info(`Flashscore: Found ${allMatches.length} match elements to parse`);
+
+      // Parse all matches into ScrapedEvent format
+      const scrapedEvents: ScrapedEvent[] = [];
+      let parseFailed = 0;
+
+      for (const match of allMatches) {
+        try {
+          const scraped = await this.parseMatch(match);
+          if (scraped) {
+            scrapedEvents.push(scraped);
+          } else {
+            parseFailed++;
+          }
+        } catch (error) {
+          parseFailed++;
+          logger.debug('Flashscore: Failed to parse match', { error });
+        }
+      }
+
+      logger.info(`Flashscore: Parsed ${scrapedEvents.length} events successfully, ${parseFailed} failed to parse`);
+
+      // Log sample of parsed events
+      if (scrapedEvents.length > 0) {
+        const sample = scrapedEvents.slice(0, 3).map(e => `${e.homeTeam} vs ${e.awayTeam}`);
+        logger.info(`Flashscore: Sample events: ${sample.join(', ')}`);
+      }
+
+      // Convert our events to DatabaseEvent format for matching
+      const dbEvents = events.map(e => ({
+        id: e.id,
+        homeTeamName: e.homeTeamName,
+        awayTeamName: e.awayTeamName,
+        startTime: e.startTime,
+      }));
+
+      // Match by team names
+      const matches = matchEvents(scrapedEvents, dbEvents, {
+        threshold: 0.7,
+        requireBothTeams: true,
+        timeWindowMs: 12 * 60 * 60 * 1000,
+      });
+
+      // Convert matches to LiveScore format
       for (const match of matches) {
-        try {
-          const id = await match.getAttribute('id');
-          if (!id) continue;
+        const scraped = match.scrapedEvent;
+        scores.set(match.dbEvent.id, {
+          eventId: match.dbEvent.id,
+          homeScore: scraped.homeScore ?? 0,
+          awayScore: scraped.awayScore ?? 0,
+          period: scraped.period || 'LIVE',
+          minute: scraped.minute,
+          isFinished: scraped.isFinished ?? false,
+        });
 
-          // Extract the base ID (strip g_X_ prefix)
-          const baseId = id.replace(/^g_\d+_/, '');
-
-          // Check if this ID matches any of our events (with or without prefix)
-          const matchingExternalId = externalIds.find(extId => {
-            const normalizedExtId = extId.replace(/^g_\d+_/, '');
-            return normalizedExtId === baseId || extId === id;
-          });
-
-          if (!matchingExternalId) continue;
-
-          const score = await this.parseScoreElement(match, matchingExternalId);
-          if (score) {
-            scores.set(matchingExternalId, score);
-          }
-        } catch (error) {
-          logger.debug('Failed to parse live match', { error });
-        }
+        logger.debug(`Flashscore: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
+          `to "${match.dbEvent.homeTeamName} vs ${match.dbEvent.awayTeamName}" ` +
+          `(confidence: ${match.confidence.toFixed(2)})`);
       }
 
-      // Also check for recently finished matches
-      const finishedMatches = await this.page.$$('.event__match--scheduled');
-      for (const match of finishedMatches) {
-        try {
-          const id = await match.getAttribute('id');
-          if (!id) continue;
+      const unmatchedCount = scrapedEvents.length - matches.length;
+      logger.info(`Flashscore: Matched ${matches.length} events, ${unmatchedCount} unmatched`);
 
-          // Extract the base ID (strip g_X_ prefix)
-          const baseId = id.replace(/^g_\d+_/, '');
-
-          // Check if this ID matches any of our events
-          const matchingExternalId = externalIds.find(extId => {
-            const normalizedExtId = extId.replace(/^g_\d+_/, '');
-            return normalizedExtId === baseId || extId === id;
-          });
-
-          if (!matchingExternalId) continue;
-
-          // Check if it has a final score
-          const hasScore = await match.$('.event__score');
-          if (hasScore) {
-            const score = await this.parseFinishedMatch(match, matchingExternalId);
-            if (score) {
-              scores.set(matchingExternalId, score);
-            }
-          }
-        } catch (error) {
-          logger.debug('Failed to parse finished match', { error });
-        }
-      }
-
-      logger.info(`Retrieved ${scores.size} live/finished scores`);
+      return { scores, matchedCount: matches.length, unmatchedCount };
     } catch (error) {
-      logger.error('Failed to fetch live scores', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      logger.error('Flashscore live scores failed', {
+        error: errorMessage,
+        stack: errorStack,
+        url: this.page.url(),
+      });
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
-
-    return scores;
   }
 
-  private async parseScoreElement(element: any, externalId: string): Promise<LiveScore | null> {
+  private async parseMatch(element: any): Promise<ScrapedEvent | null> {
     try {
-      const homeScore = await element
-        .$eval('.event__score--home', (el: Element) =>
-          parseInt(el.textContent?.trim() || '0')
-        )
-        .catch(() => 0);
+      // Flashscore uses heavily obfuscated CSS classes (wcl-XXX_randomHash)
+      // Instead of relying on classes, we use DOM structure and text patterns
+      const matchData = await element.evaluate((el: Element) => {
+        // Strategy: Extract ALL text from the element and parse it structurally
+        // Flashscore structure is roughly:
+        // [Time/Status] [Home Team] [Score] - [Score] [Away Team]
 
-      const awayScore = await element
-        .$eval('.event__score--away', (el: Element) =>
-          parseInt(el.textContent?.trim() || '0')
-        )
-        .catch(() => 0);
+        // Method 1: Look for links to team pages (most reliable)
+        const teamLinks = el.querySelectorAll('a[href*="/team/"]');
+        const teamNames: string[] = [];
 
-      const stageText = await element
-        .$eval('.event__stage--block', (el: Element) => el.textContent?.trim())
-        .catch(() => null);
+        teamLinks.forEach((link) => {
+          // Get the deepest text content (usually in a span)
+          const textEl = link.querySelector('span') || link;
+          const text = textEl.textContent?.trim();
+          // Filter out scores and empty strings
+          if (text && text.length > 1 && text.length < 60 && !/^[\d\-:]+$/.test(text)) {
+            teamNames.push(text);
+          }
+        });
 
-      const period = this.parsePeriod(stageText);
-      const minute = this.parseMinute(stageText);
-      const isFinished = stageText?.toLowerCase().includes('finished') ?? false;
+        // Method 2: If no team links, look for participant divs by structure
+        if (teamNames.length < 2) {
+          // Find divs that look like participant containers
+          const allDivs = el.querySelectorAll('div');
+          allDivs.forEach((div) => {
+            const className = div.className || '';
+            // Look for participant-related classes (obfuscated but contain patterns)
+            if (className.includes('participant') || className.includes('Participant')) {
+              const spans = div.querySelectorAll('span');
+              spans.forEach((span) => {
+                const text = span.textContent?.trim();
+                if (text && text.length > 1 && text.length < 60 && !/^[\d\-:]+$/.test(text)) {
+                  if (!teamNames.includes(text)) {
+                    teamNames.push(text);
+                  }
+                }
+              });
+            }
+          });
+        }
+
+        // Method 3: Look for score elements and extract adjacent team names
+        const scoreElements: string[] = [];
+        const allSpans = el.querySelectorAll('span');
+        allSpans.forEach((span) => {
+          const text = span.textContent?.trim();
+          // Scores are typically 1-3 digit numbers
+          if (text && /^\d{1,3}$/.test(text)) {
+            scoreElements.push(text);
+          }
+        });
+
+        // Extract status/period text
+        let statusText = '';
+        // Look for time/status elements (usually contain ', HT, FT, etc.)
+        allSpans.forEach((span) => {
+          const text = span.textContent?.trim() || '';
+          const className = span.className || '';
+          if (
+            className.includes('stage') ||
+            className.includes('Stage') ||
+            className.includes('time') ||
+            className.includes('Time') ||
+            text.includes("'") ||
+            /^(HT|FT|ET|PEN|1H|2H|Live)$/i.test(text) ||
+            /^\d+['′]$/.test(text)
+          ) {
+            if (text.length < 20) {
+              statusText = text;
+            }
+          }
+        });
+
+        // Check for "Finished" status
+        const isFinished =
+          el.textContent?.toLowerCase().includes('finished') ||
+          el.textContent?.toLowerCase().includes('ft') ||
+          el.className?.includes('finished');
+
+        // Get element ID for debugging
+        const id = el.getAttribute('id') || '';
+
+        return {
+          teamNames: teamNames.slice(0, 2),
+          scores: scoreElements.slice(0, 2),
+          statusText,
+          isFinished: !!isFinished,
+          id,
+          // Debug: include raw text for troubleshooting
+          rawText: el.textContent?.substring(0, 200) || '',
+        };
+      }).catch(() => null);
+
+      if (!matchData) return null;
+
+      // Need at least 2 team names
+      if (matchData.teamNames.length < 2) {
+        // Log first failure for debugging
+        if (this.parseFailCount === 0) {
+          logger.debug('Flashscore parse failed - raw text sample:', {
+            rawText: matchData.rawText,
+            teamNames: matchData.teamNames,
+            id: matchData.id,
+          });
+        }
+        this.parseFailCount++;
+        return null;
+      }
+
+      const homeTeam = matchData.teamNames[0];
+      const awayTeam = matchData.teamNames[1];
+      const homeScore = matchData.scores[0] ? parseInt(matchData.scores[0]) : 0;
+      const awayScore = matchData.scores[1] ? parseInt(matchData.scores[1]) : 0;
+
+      const period = this.parsePeriod(matchData.statusText);
+      const minute = this.parseMinute(matchData.statusText);
 
       return {
-        externalId,
+        homeTeam,
+        awayTeam,
         homeScore,
         awayScore,
         period,
         minute,
-        isFinished,
-      };
-    } catch (error) {
-      logger.debug('Error parsing score element', { error });
-      return null;
-    }
-  }
-
-  private async parseFinishedMatch(element: any, externalId: string): Promise<LiveScore | null> {
-    try {
-      const homeScore = await element
-        .$eval('.event__score--home', (el: Element) =>
-          parseInt(el.textContent?.trim() || '0')
-        )
-        .catch(() => 0);
-
-      const awayScore = await element
-        .$eval('.event__score--away', (el: Element) =>
-          parseInt(el.textContent?.trim() || '0')
-        )
-        .catch(() => 0);
-
-      return {
-        externalId,
-        homeScore,
-        awayScore,
-        period: 'Full Time',
-        isFinished: true,
+        isFinished: matchData.isFinished,
+        sourceId: matchData.id || undefined,
+        sourceName: 'flashscore',
       };
     } catch (error) {
       return null;
     }
   }
+
+  private parseFailCount = 0;
 
   private parsePeriod(stageText: string | null): string {
-    if (!stageText) return 'Live';
+    if (!stageText) return 'LIVE';
 
     const text = stageText.toLowerCase();
 
-    if (text.includes('1st half') || text.includes('first half')) return '1st Half';
-    if (text.includes('2nd half') || text.includes('second half')) return '2nd Half';
-    if (text.includes('half time') || text.includes('ht')) return 'Half Time';
-    if (text.includes('full time') || text.includes('ft')) return 'Full Time';
-    if (text.includes('extra time') || text.includes('et')) return 'Extra Time';
-    if (text.includes('penalties') || text.includes('pens')) return 'Penalties';
+    if (text.includes('finished') || text.includes('ft')) return 'FT';
+    if (text.includes('half time') || text.includes('ht')) return 'HT';
+    if (text.includes('1st half') || text.includes('first half')) return '1H';
+    if (text.includes('2nd half') || text.includes('second half')) return '2H';
+    if (text.includes('extra time') || text.includes('et')) return 'ET';
+    if (text.includes('penalties') || text.includes('pens')) return 'PEN';
 
     // For other sports
-    if (text.includes('1st set')) return '1st Set';
-    if (text.includes('2nd set')) return '2nd Set';
-    if (text.includes('3rd set')) return '3rd Set';
-    if (text.includes('1st quarter') || text.includes('q1')) return '1st Quarter';
-    if (text.includes('2nd quarter') || text.includes('q2')) return '2nd Quarter';
-    if (text.includes('3rd quarter') || text.includes('q3')) return '3rd Quarter';
-    if (text.includes('4th quarter') || text.includes('q4')) return '4th Quarter';
+    if (text.includes('1st set')) return '1S';
+    if (text.includes('2nd set')) return '2S';
+    if (text.includes('3rd set')) return '3S';
+    if (text.includes('1st quarter') || text.includes('q1')) return '1Q';
+    if (text.includes('2nd quarter') || text.includes('q2')) return '2Q';
+    if (text.includes('3rd quarter') || text.includes('q3')) return '3Q';
+    if (text.includes('4th quarter') || text.includes('q4')) return '4Q';
 
-    return 'Live';
+    return 'LIVE';
   }
 
   private parseMinute(stageText: string | null): number | undefined {

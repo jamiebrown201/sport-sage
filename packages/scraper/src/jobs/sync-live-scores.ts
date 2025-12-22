@@ -1,10 +1,10 @@
 import type { ScheduledHandler, Context } from 'aws-lambda';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getDb, events } from '@sport-sage/database';
+import { getDb, events, sports } from '@sport-sage/database';
 import { eq, sql } from 'drizzle-orm';
-import { launchBrowser, createPage } from '../utils/browser';
+import { launchBrowser } from '../utils/browser';
 import { logger } from '../utils/logger';
-import { LiveScoresOrchestrator } from '../scrapers/live-scores-orchestrator';
+import { LiveScoresOrchestrator, type EventToMatch } from '../scrapers/live-scores-orchestrator';
 import { RunTracker } from '../utils/run-tracker';
 
 const sqs = new SQSClient({ region: process.env.AWS_REGION || 'eu-west-1' });
@@ -21,37 +21,55 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
   const db = getDb();
 
   // First, check if there are any live events
+  // Join with sports to get the sport slug for scraper matching
   // Use raw SQL for enum comparison (Data API compatibility)
-  const liveEvents = await db
-    .select()
+  const liveEventsWithSport = await db
+    .select({
+      id: events.id,
+      homeTeamName: events.homeTeamName,
+      awayTeamName: events.awayTeamName,
+      startTime: events.startTime,
+      sportSlug: sports.slug,
+    })
     .from(events)
+    .innerJoin(sports, eq(events.sportId, sports.id))
     .where(sql`${events.status}::text = 'live'`);
 
-  if (liveEvents.length === 0) {
+  if (liveEventsWithSport.length === 0) {
     logger.info('No live events, skipping sync');
     await tracker.complete();
     return;
   }
 
-  logger.info(`Found ${liveEvents.length} live events`);
+  logger.info(`Found ${liveEventsWithSport.length} live events`);
+
+  // Convert to EventToMatch format
+  const eventsToMatch: EventToMatch[] = liveEventsWithSport
+    .filter(e => e.homeTeamName && e.awayTeamName) // Must have team names
+    .map(e => ({
+      id: e.id,
+      homeTeamName: e.homeTeamName!,
+      awayTeamName: e.awayTeamName!,
+      startTime: e.startTime,
+      sportSlug: e.sportSlug,
+    }));
+
+  if (eventsToMatch.length === 0) {
+    logger.warn('No events with team names, skipping sync');
+    await tracker.complete();
+    return;
+  }
+
+  logger.info(`${eventsToMatch.length} events have team names for matching`);
 
   let browser;
 
   try {
     browser = await launchBrowser();
 
-    // Use multi-source orchestrator - tries free sources first!
+    // Use multi-source orchestrator - matches by team names!
     const orchestrator = new LiveScoresOrchestrator();
-
-    // Get all external IDs (any source)
-    const externalIds = liveEvents
-      .flatMap((e) => [
-        e.externalFlashscoreId,
-        e.externalOddscheckerId,
-      ])
-      .filter((id): id is string => !!id);
-
-    const result = await orchestrator.getLiveScores(browser, externalIds);
+    const result = await orchestrator.getLiveScores(browser, eventsToMatch);
     const scores = result.scores;
 
     logger.info(`Sources used: ${result.sourcesUsed.join(', ') || 'none'}`);
@@ -60,28 +78,22 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
     let updated = 0;
     let finished = 0;
 
-    for (const [externalId, score] of scores) {
-      // Find event by any of its external IDs
-      const event = liveEvents.find(
-        (e) =>
-          e.externalFlashscoreId === externalId ||
-          e.externalOddscheckerId === externalId
-      );
-      if (!event) continue;
-
+    for (const [eventId, score] of scores) {
       try {
-        // Update event
+        // Update event using Drizzle ORM with sql.raw for enum
+        // Data API requires explicit casting for PostgreSQL enums
+        const newStatus = score.isFinished ? 'finished' : 'live';
         await db
           .update(events)
           .set({
             homeScore: score.homeScore,
             awayScore: score.awayScore,
             period: score.period,
-            minute: score.minute,
-            status: score.isFinished ? 'finished' : 'live',
+            minute: score.minute ?? null,
+            status: sql.raw(`'${newStatus}'::event_status`),
             updatedAt: new Date(),
-          })
-          .where(eq(events.id, event.id));
+          } as any)
+          .where(eq(events.id, eventId));
 
         updated++;
 
@@ -95,28 +107,27 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
                 QueueUrl: SETTLEMENT_QUEUE_URL,
                 MessageBody: JSON.stringify({
                   type: 'event_finished',
-                  eventId: event.id,
-                  externalId,
+                  eventId: eventId,
                   result: {
                     homeScore: score.homeScore,
                     awayScore: score.awayScore,
                   },
                 }),
-                MessageGroupId: event.id, // FIFO queue deduplication
+                MessageGroupId: eventId, // FIFO queue deduplication
               })
             );
 
-            logger.info(`Queued event for settlement: ${event.id}`);
+            logger.info(`Queued event for settlement: ${eventId}`);
           }
         }
       } catch (error) {
-        logger.error(`Failed to update event: ${event.id}`, error);
+        logger.error(`Failed to update event: ${eventId}`, error);
       }
     }
 
     // Record stats for monitoring
     tracker.recordSportStats('all', {
-      processed: liveEvents.length,
+      processed: liveEventsWithSport.length,
       updated,
     });
 

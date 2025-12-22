@@ -1,88 +1,140 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
 import { randomDelay, retryWithBackoff } from '../../utils/browser';
-
-export interface LiveScore {
-  externalId: string;
-  homeScore: number;
-  awayScore: number;
-  period: string;
-  minute?: number;
-  isFinished: boolean;
-}
+import { matchEvents, type ScrapedEvent } from '../../utils/team-matcher';
+import type { LiveScoresScraper, EventToMatch, ScrapeResult, LiveScore } from '../types';
 
 /**
- * SofaScore live scores scraper - FREE alternative to Flashscore
- * Uses their JSON API which is less protected
+ * SofaScore live scores scraper - FREE API, no proxy needed
+ *
+ * Uses api.sofascore.com which is accessible from AWS IPs.
+ * Matches events by team names, not source-specific IDs.
  */
-export class SofascoreLiveScoresScraper {
+export class SofascoreLiveScoresScraper implements LiveScoresScraper {
   constructor(private page: Page) {}
 
-  async getLiveScores(externalIds: string[]): Promise<Map<string, LiveScore>> {
+  async getLiveScores(events: EventToMatch[]): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
 
-    if (externalIds.length === 0) {
-      return scores;
+    if (events.length === 0) {
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
 
-    // Extract SofaScore IDs (ss_XXXXX format)
-    const sofascoreIds = externalIds
-      .filter(id => id.startsWith('ss_'))
-      .map(id => id.replace('ss_', ''));
-
-    if (sofascoreIds.length === 0) {
-      logger.debug('No SofaScore IDs to fetch');
-      return scores;
-    }
-
-    logger.info(`SofaScore: Fetching live scores for ${sofascoreIds.length} events`);
+    logger.info(`SofaScore: Looking for scores for ${events.length} events`);
 
     try {
-      // Fetch live events from SofaScore API
-      const liveEvents = await this.fetchLiveEvents();
+      // Group events by sport (SofaScore has different endpoints per sport)
+      const footballEvents = events.filter(e => e.sportSlug === 'football');
+      const basketballEvents = events.filter(e => e.sportSlug === 'basketball');
+      const tennisEvents = events.filter(e => e.sportSlug === 'tennis');
 
-      // Match with our IDs
-      for (const event of liveEvents) {
-        const eventId = String(event.id);
-        const matchingId = externalIds.find(id => id === `ss_${eventId}`);
+      let totalMatched = 0;
+      let totalUnmatched = 0;
 
-        if (matchingId) {
-          const score = this.parseEvent(event, matchingId);
-          if (score) {
-            scores.set(matchingId, score);
-          }
+      // Fetch live events for each sport
+      if (footballEvents.length > 0) {
+        const result = await this.fetchAndMatchSport('football', footballEvents);
+        for (const [id, score] of result.scores) {
+          scores.set(id, score);
         }
+        totalMatched += result.matchedCount;
+        totalUnmatched += result.unmatchedCount;
       }
 
-      // Also fetch specific event details for IDs not found in live feed
-      const foundIds = new Set(Array.from(scores.keys()));
-      const missingIds = sofascoreIds.filter(id => !foundIds.has(`ss_${id}`));
-
-      for (const eventId of missingIds.slice(0, 10)) { // Limit to avoid rate limiting
-        try {
-          const event = await this.fetchEventDetails(eventId);
-          if (event) {
-            const score = this.parseEvent(event, `ss_${eventId}`);
-            if (score) {
-              scores.set(`ss_${eventId}`, score);
-            }
-          }
-          await randomDelay(200, 500);
-        } catch (error) {
-          logger.debug(`Failed to fetch SofaScore event ${eventId}`, { error });
+      if (basketballEvents.length > 0) {
+        const result = await this.fetchAndMatchSport('basketball', basketballEvents);
+        for (const [id, score] of result.scores) {
+          scores.set(id, score);
         }
+        totalMatched += result.matchedCount;
+        totalUnmatched += result.unmatchedCount;
       }
 
-      logger.info(`SofaScore: Retrieved ${scores.size} live/finished scores`);
-      return scores;
+      if (tennisEvents.length > 0) {
+        const result = await this.fetchAndMatchSport('tennis', tennisEvents);
+        for (const [id, score] of result.scores) {
+          scores.set(id, score);
+        }
+        totalMatched += result.matchedCount;
+        totalUnmatched += result.unmatchedCount;
+      }
+
+      logger.info(`SofaScore: Matched ${totalMatched} events, ${totalUnmatched} unmatched`);
+      return { scores, matchedCount: totalMatched, unmatchedCount: totalUnmatched };
     } catch (error) {
       logger.error('SofaScore live scores failed', { error });
-      return scores;
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
   }
 
-  private async fetchLiveEvents(): Promise<any[]> {
-    const apiUrl = 'https://api.sofascore.com/api/v1/sport/football/events/live';
+  private async fetchAndMatchSport(
+    sport: string,
+    events: EventToMatch[]
+  ): Promise<ScrapeResult> {
+    const scores = new Map<string, LiveScore>();
+
+    // Fetch all live events from SofaScore for this sport
+    const liveEvents = await this.fetchLiveEvents(sport);
+
+    if (liveEvents.length === 0) {
+      logger.debug(`SofaScore: No live ${sport} events found`);
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
+    }
+
+    logger.debug(`SofaScore: Found ${liveEvents.length} live ${sport} events to match`);
+
+    // Convert SofaScore events to our ScrapedEvent format
+    const scrapedEvents: ScrapedEvent[] = liveEvents.map(event => ({
+      homeTeam: event.homeTeam?.name || event.homeTeam?.shortName || '',
+      awayTeam: event.awayTeam?.name || event.awayTeam?.shortName || '',
+      homeScore: event.homeScore?.current ?? 0,
+      awayScore: event.awayScore?.current ?? 0,
+      period: this.parsePeriod(event),
+      minute: this.parseMinute(event),
+      isFinished: event.status?.type === 'finished',
+      startTime: event.startTimestamp ? new Date(event.startTimestamp * 1000) : undefined,
+      sourceId: String(event.id),
+      sourceName: 'sofascore',
+    }));
+
+    // Convert our events to DatabaseEvent format for matching
+    const dbEvents = events.map(e => ({
+      id: e.id,
+      homeTeamName: e.homeTeamName,
+      awayTeamName: e.awayTeamName,
+      startTime: e.startTime,
+    }));
+
+    // Match by team names
+    const matches = matchEvents(scrapedEvents, dbEvents, {
+      threshold: 0.7, // Slightly lower threshold to catch abbreviations
+      requireBothTeams: true,
+      timeWindowMs: 12 * 60 * 60 * 1000, // 12 hour window
+    });
+
+    // Convert matches to LiveScore format
+    for (const match of matches) {
+      const scraped = match.scrapedEvent;
+      scores.set(match.dbEvent.id, {
+        eventId: match.dbEvent.id,
+        homeScore: scraped.homeScore ?? 0,
+        awayScore: scraped.awayScore ?? 0,
+        period: scraped.period || 'LIVE',
+        minute: scraped.minute,
+        isFinished: scraped.isFinished ?? false,
+      });
+
+      logger.debug(`SofaScore: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
+        `to "${match.dbEvent.homeTeamName} vs ${match.dbEvent.awayTeamName}" ` +
+        `(confidence: ${match.confidence.toFixed(2)})`);
+    }
+
+    const unmatchedCount = scrapedEvents.length - matches.length;
+    return { scores, matchedCount: matches.length, unmatchedCount };
+  }
+
+  private async fetchLiveEvents(sport: string): Promise<any[]> {
+    const apiUrl = `https://api.sofascore.com/api/v1/sport/${sport}/events/live`;
 
     try {
       await retryWithBackoff(async () => {
@@ -99,85 +151,47 @@ export class SofascoreLiveScoresScraper {
 
       return data.events || [];
     } catch (error) {
-      logger.debug('Failed to fetch SofaScore live events', { error });
+      logger.debug(`Failed to fetch SofaScore live ${sport} events`, { error });
       return [];
     }
   }
 
-  private async fetchEventDetails(eventId: string): Promise<any | null> {
-    const apiUrl = `https://api.sofascore.com/api/v1/event/${eventId}`;
+  private parsePeriod(event: any): string {
+    const status = event.status?.type || '';
+    const statusDesc = event.status?.description?.toLowerCase() || '';
 
-    try {
-      await this.page.goto(apiUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 10000,
-      });
+    if (status === 'finished') return 'FT';
+    if (status === 'notstarted') return 'NS';
+    if (status === 'postponed') return 'PPD';
+    if (status === 'canceled' || status === 'cancelled') return 'CANC';
 
-      const bodyText = await this.page.evaluate(() => document.body.innerText);
-      const data = JSON.parse(bodyText);
-
-      return data.event || null;
-    } catch (error) {
-      return null;
+    if (status === 'inprogress') {
+      if (statusDesc.includes('1st half') || statusDesc.includes('first half')) return '1H';
+      if (statusDesc.includes('2nd half') || statusDesc.includes('second half')) return '2H';
+      if (statusDesc.includes('halftime') || statusDesc.includes('half time')) return 'HT';
+      if (statusDesc.includes('extra')) return 'ET';
+      if (statusDesc.includes('penalties') || statusDesc.includes('penalty')) return 'PEN';
+      if (statusDesc.includes('1st quarter') || statusDesc.includes('q1')) return '1Q';
+      if (statusDesc.includes('2nd quarter') || statusDesc.includes('q2')) return '2Q';
+      if (statusDesc.includes('3rd quarter') || statusDesc.includes('q3')) return '3Q';
+      if (statusDesc.includes('4th quarter') || statusDesc.includes('q4')) return '4Q';
+      if (statusDesc.includes('1st set')) return '1S';
+      if (statusDesc.includes('2nd set')) return '2S';
+      if (statusDesc.includes('3rd set')) return '3S';
+      return 'LIVE';
     }
+
+    return 'Unknown';
   }
 
-  private parseEvent(event: any, externalId: string): LiveScore | null {
-    try {
-      const status = event.status?.type || '';
-      const homeScore = event.homeScore?.current ?? 0;
-      const awayScore = event.awayScore?.current ?? 0;
+  private parseMinute(event: any): number | undefined {
+    if (event.status?.type !== 'inprogress') return undefined;
 
-      // Determine period
-      let period = 'Unknown';
-      let isFinished = false;
-      let minute: number | undefined;
-
-      if (status === 'finished') {
-        period = 'FT';
-        isFinished = true;
-      } else if (status === 'inprogress') {
-        // Get current time info
-        const statusTime = event.time?.currentPeriodStartTimestamp;
-        const currentTime = event.time?.played;
-
-        if (currentTime) {
-          minute = Math.floor(currentTime / 60);
-        }
-
-        // Determine period based on status description
-        const statusDesc = event.status?.description?.toLowerCase() || '';
-        if (statusDesc.includes('1st half') || statusDesc.includes('first half')) {
-          period = '1H';
-        } else if (statusDesc.includes('2nd half') || statusDesc.includes('second half')) {
-          period = '2H';
-        } else if (statusDesc.includes('halftime') || statusDesc.includes('half time')) {
-          period = 'HT';
-        } else if (statusDesc.includes('extra')) {
-          period = 'ET';
-        } else if (statusDesc.includes('penalties') || statusDesc.includes('penalty')) {
-          period = 'PEN';
-        } else {
-          period = 'LIVE';
-        }
-      } else if (status === 'notstarted') {
-        period = 'NS';
-      } else if (status === 'postponed') {
-        period = 'PPD';
-      } else if (status === 'canceled' || status === 'cancelled') {
-        period = 'CANC';
-      }
-
-      return {
-        externalId,
-        homeScore,
-        awayScore,
-        period,
-        minute,
-        isFinished,
-      };
-    } catch (error) {
-      return null;
+    const currentTime = event.time?.played;
+    if (currentTime) {
+      return Math.floor(currentTime / 60);
     }
+
+    return undefined;
   }
 }

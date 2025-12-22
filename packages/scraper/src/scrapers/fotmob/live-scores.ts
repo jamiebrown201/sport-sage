@@ -1,60 +1,52 @@
 import type { Page } from 'playwright-core';
 import { logger } from '../../utils/logger';
 import { randomDelay, retryWithBackoff } from '../../utils/browser';
-
-export interface LiveScore {
-  externalId: string;
-  homeScore: number;
-  awayScore: number;
-  period: string;
-  minute?: number;
-  isFinished: boolean;
-}
+import { matchEvents, type ScrapedEvent } from '../../utils/team-matcher';
+import type { LiveScoresScraper, EventToMatch, ScrapeResult, LiveScore } from '../types';
 
 /**
- * FotMob scraper - Alternative source with JSON API
+ * FotMob API scraper - FREE, works without proxy (FOOTBALL ONLY)
  *
- * FotMob has a JSON API that's relatively accessible.
- * Good fallback when Flashscore/SofaScore are blocked.
+ * FotMob has a JSON API that's relatively accessible from AWS IPs.
+ * Only supports football/soccer - no other sports.
+ *
+ * API endpoint: https://www.fotmob.com/api/matches?date=YYYYMMDD
  */
-export class FotMobLiveScoresScraper {
+export class FotMobLiveScoresScraper implements LiveScoresScraper {
   constructor(private page: Page) {}
 
-  async getLiveScores(externalIds: string[]): Promise<Map<string, LiveScore>> {
+  async getLiveScores(events: EventToMatch[]): Promise<ScrapeResult> {
     const scores = new Map<string, LiveScore>();
 
-    if (externalIds.length === 0) {
-      return scores;
+    if (events.length === 0) {
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
 
-    logger.info(`FotMob: Fetching live scores`);
+    // FotMob only supports football
+    const footballEvents = events.filter(e => e.sportSlug === 'football');
+
+    if (footballEvents.length === 0) {
+      logger.debug('FotMob: No football events to match');
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
+    }
+
+    logger.info(`FotMob: Looking for scores for ${footballEvents.length} football events`);
 
     try {
-      // Fetch live matches from FotMob API
-      const liveMatches = await this.fetchLiveMatches();
-
-      // Try to match with our external IDs by team names
-      for (const match of liveMatches) {
-        const matchingId = this.findMatchingId(match, externalIds);
-        if (matchingId) {
-          const score = this.parseMatch(match, matchingId);
-          if (score) {
-            scores.set(matchingId, score);
-          }
-        }
-      }
-
-      logger.info(`FotMob: Retrieved ${scores.size} live/finished scores`);
-      return scores;
+      const result = await this.fetchAndMatchFootball(footballEvents);
+      return result;
     } catch (error) {
       logger.error('FotMob live scores failed', { error });
-      return scores;
+      return { scores, unmatchedCount: 0, matchedCount: 0 };
     }
   }
 
-  private async fetchLiveMatches(): Promise<any[]> {
-    // FotMob API endpoint for live matches
-    const apiUrl = 'https://www.fotmob.com/api/matches?date=' + this.getTodayDate();
+  private async fetchAndMatchFootball(events: EventToMatch[]): Promise<ScrapeResult> {
+    const scores = new Map<string, LiveScore>();
+
+    // FotMob API endpoint for today's matches
+    const today = new Date().toISOString().split('T')[0]!.replace(/-/g, '');
+    const apiUrl = `https://www.fotmob.com/api/matches?date=${today}`;
 
     try {
       await retryWithBackoff(async () => {
@@ -64,188 +56,121 @@ export class FotMobLiveScoresScraper {
         });
       });
 
-      await randomDelay(300, 600);
+      await randomDelay(200, 400);
 
       const bodyText = await this.page.evaluate(() => document.body.innerText);
       const data = JSON.parse(bodyText);
 
-      // Extract matches from leagues
-      const allMatches: any[] = [];
+      // Parse FotMob API response
+      const scrapedEvents: ScrapedEvent[] = [];
 
+      // FotMob structure: { leagues: [{ matches: [...] }] }
       if (data.leagues) {
         for (const league of data.leagues) {
-          if (league.matches) {
-            allMatches.push(...league.matches);
-          }
-        }
-      }
+          if (!league.matches) continue;
 
-      return allMatches;
-    } catch (error) {
-      logger.debug('Failed to fetch FotMob live matches', { error });
-      return [];
-    }
-  }
+          for (const match of league.matches) {
+            try {
+              const status = match.status || {};
+              const isLive = status.started && !status.finished;
+              const isFinished = status.finished === true;
 
-  async getFixtures(days = 7): Promise<Array<{
-    externalId: string;
-    homeTeam: string;
-    awayTeam: string;
-    competition: string;
-    startTime: Date;
-  }>> {
-    const fixtures: Array<{
-      externalId: string;
-      homeTeam: string;
-      awayTeam: string;
-      competition: string;
-      startTime: Date;
-    }> = [];
+              // Skip if not live or finished
+              if (!isLive && !isFinished) continue;
 
-    for (let dayOffset = 0; dayOffset < days; dayOffset++) {
-      try {
-        const date = this.getDateOffset(dayOffset);
-        const dayFixtures = await this.fetchDayFixtures(date);
-        fixtures.push(...dayFixtures);
-        await randomDelay(300, 600);
-      } catch (error) {
-        logger.debug(`FotMob: Failed to fetch day ${dayOffset}`, { error });
-      }
-    }
-
-    return fixtures;
-  }
-
-  private async fetchDayFixtures(date: string): Promise<Array<{
-    externalId: string;
-    homeTeam: string;
-    awayTeam: string;
-    competition: string;
-    startTime: Date;
-  }>> {
-    const apiUrl = `https://www.fotmob.com/api/matches?date=${date}`;
-
-    try {
-      await this.page.goto(apiUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000,
-      });
-
-      const bodyText = await this.page.evaluate(() => document.body.innerText);
-      const data = JSON.parse(bodyText);
-
-      const fixtures: Array<{
-        externalId: string;
-        homeTeam: string;
-        awayTeam: string;
-        competition: string;
-        startTime: Date;
-      }> = [];
-
-      if (data.leagues) {
-        for (const league of data.leagues) {
-          const leagueName = league.name || league.leagueName || 'Unknown';
-
-          if (league.matches) {
-            for (const match of league.matches) {
-              if (!match.status?.started) { // Only upcoming
-                fixtures.push({
-                  externalId: `fm_${match.id}`,
-                  homeTeam: match.home?.name || match.homeTeam?.name || 'Unknown',
-                  awayTeam: match.away?.name || match.awayTeam?.name || 'Unknown',
-                  competition: leagueName,
-                  startTime: new Date(match.timeTS || match.status?.utcTime),
-                });
-              }
+              scrapedEvents.push({
+                homeTeam: match.home?.name || match.homeTeam?.name || '',
+                awayTeam: match.away?.name || match.awayTeam?.name || '',
+                homeScore: match.home?.score ?? 0,
+                awayScore: match.away?.score ?? 0,
+                period: this.parsePeriod(status),
+                minute: this.parseMinute(status),
+                isFinished,
+                startTime: match.timeTS ? new Date(match.timeTS * 1000) : undefined,
+                sourceId: String(match.id),
+                sourceName: 'fotmob',
+              });
+            } catch (e) {
+              // Skip malformed matches
             }
           }
         }
       }
 
-      return fixtures;
+      if (scrapedEvents.length === 0) {
+        logger.debug('FotMob: No live/finished football events found');
+        return { scores, unmatchedCount: 0, matchedCount: 0 };
+      }
+
+      logger.debug(`FotMob: Found ${scrapedEvents.length} live/finished football events`);
+
+      // Convert our events to DatabaseEvent format for matching
+      const dbEvents = events.map(e => ({
+        id: e.id,
+        homeTeamName: e.homeTeamName,
+        awayTeamName: e.awayTeamName,
+        startTime: e.startTime,
+      }));
+
+      // Match by team names
+      const matches = matchEvents(scrapedEvents, dbEvents, {
+        threshold: 0.7,
+        requireBothTeams: true,
+        timeWindowMs: 12 * 60 * 60 * 1000, // 12 hour window
+      });
+
+      // Convert matches to LiveScore format
+      for (const match of matches) {
+        const scraped = match.scrapedEvent;
+        scores.set(match.dbEvent.id, {
+          eventId: match.dbEvent.id,
+          homeScore: scraped.homeScore ?? 0,
+          awayScore: scraped.awayScore ?? 0,
+          period: scraped.period || 'LIVE',
+          minute: scraped.minute,
+          isFinished: scraped.isFinished ?? false,
+        });
+
+        logger.debug(`FotMob: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
+          `to "${match.dbEvent.homeTeamName} vs ${match.dbEvent.awayTeamName}" ` +
+          `(confidence: ${match.confidence.toFixed(2)})`);
+      }
+
+      const unmatchedCount = scrapedEvents.length - matches.length;
+      return { scores, matchedCount: matches.length, unmatchedCount };
     } catch (error) {
-      logger.debug('FotMob fixtures fetch failed', { error });
-      return [];
+      logger.debug('Failed to fetch FotMob events', { error });
+      return { scores, matchedCount: 0, unmatchedCount: 0 };
     }
   }
 
-  private findMatchingId(match: any, externalIds: string[]): string | null {
-    const homeTeam = (match.home?.name || match.homeTeam?.name || '').toLowerCase();
-    const awayTeam = (match.away?.name || match.awayTeam?.name || '').toLowerCase();
+  private parsePeriod(status: any): string {
+    if (status.finished) return 'FT';
+    if (status.halftime) return 'HT';
 
-    // First check for FotMob IDs
-    const fmId = `fm_${match.id}`;
-    if (externalIds.includes(fmId)) {
-      return fmId;
+    // Check liveTime for minute display
+    if (status.liveTime?.short) {
+      const short = status.liveTime.short;
+      // FotMob uses "45'" or "90+3'" format
+      return short;
     }
 
-    // Try to match by team names (fuzzy)
-    for (const externalId of externalIds) {
-      // This is a simple match - in production you'd use proper team name normalization
-      if (this.teamsMatch(homeTeam, awayTeam, externalId)) {
-        return externalId;
+    if (status.started) {
+      return 'LIVE';
+    }
+
+    return 'NS';
+  }
+
+  private parseMinute(status: any): number | undefined {
+    if (status.liveTime?.short) {
+      const short = status.liveTime.short;
+      // Extract minute from "45'" or "90+3'" format
+      const minuteMatch = short.match(/^(\d+)/);
+      if (minuteMatch) {
+        return parseInt(minuteMatch[1]);
       }
     }
-
-    return null;
-  }
-
-  private teamsMatch(homeTeam: string, awayTeam: string, externalId: string): boolean {
-    // Very basic matching - just check if team names appear in the ID
-    const idLower = externalId.toLowerCase();
-    return idLower.includes(homeTeam.substring(0, 5)) ||
-           idLower.includes(awayTeam.substring(0, 5));
-  }
-
-  private parseMatch(match: any, externalId: string): LiveScore | null {
-    try {
-      const status = match.status || {};
-      const homeScore = match.home?.score ?? match.homeScore ?? 0;
-      const awayScore = match.away?.score ?? match.awayScore ?? 0;
-
-      let period = 'Unknown';
-      let isFinished = false;
-      let minute: number | undefined;
-
-      if (status.finished) {
-        period = 'FT';
-        isFinished = true;
-      } else if (status.started) {
-        if (status.liveTime?.short) {
-          period = status.liveTime.short;
-          const minuteMatch = period.match(/(\d+)/);
-          if (minuteMatch) {
-            minute = parseInt(minuteMatch[1]!);
-          }
-        } else if (status.halftime) {
-          period = 'HT';
-        } else {
-          period = 'LIVE';
-        }
-      } else {
-        period = 'NS';
-      }
-
-      return {
-        externalId,
-        homeScore,
-        awayScore,
-        period,
-        minute,
-        isFinished,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  private getTodayDate(): string {
-    return new Date().toISOString().split('T')[0]!;
-  }
-
-  private getDateOffset(days: number): string {
-    const date = new Date();
-    date.setDate(date.getDate() + days);
-    return date.toISOString().split('T')[0]!;
+    return undefined;
   }
 }
