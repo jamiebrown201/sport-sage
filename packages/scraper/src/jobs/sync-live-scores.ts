@@ -30,6 +30,7 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
       awayTeamName: events.awayTeamName,
       startTime: events.startTime,
       sportSlug: sports.slug,
+      competitionName: events.competitionName,
     })
     .from(events)
     .innerJoin(sports, eq(events.sportId, sports.id))
@@ -53,6 +54,13 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
       startTime: e.startTime,
       sportSlug: e.sportSlug,
     }));
+
+  // Track which events need competition name updates (currently "Unknown")
+  const eventsNeedingCompetition = new Set(
+    liveEventsWithSport
+      .filter(e => !e.competitionName || e.competitionName === 'Unknown')
+      .map(e => e.id)
+  );
 
   if (eventsToMatch.length === 0) {
     logger.warn('No events with team names, skipping sync');
@@ -78,21 +86,34 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
     let updated = 0;
     let finished = 0;
 
+    let competitionUpdates = 0;
+
     for (const [eventId, score] of scores) {
       try {
         // Update event using Drizzle ORM with sql.raw for enum
         // Data API requires explicit casting for PostgreSQL enums
         const newStatus = score.isFinished ? 'finished' : 'live';
+
+        // Build update object
+        const updateData: any = {
+          homeScore: score.homeScore,
+          awayScore: score.awayScore,
+          period: score.period,
+          minute: score.minute ?? null,
+          status: sql.raw(`'${newStatus}'::event_status`),
+          updatedAt: new Date(),
+        };
+
+        // Also update competition name if we have it and the event needs it
+        if (score.competitionName && eventsNeedingCompetition.has(eventId)) {
+          updateData.competitionName = score.competitionName;
+          competitionUpdates++;
+          logger.debug(`Updating competition name for ${eventId}: ${score.competitionName}`);
+        }
+
         await db
           .update(events)
-          .set({
-            homeScore: score.homeScore,
-            awayScore: score.awayScore,
-            period: score.period,
-            minute: score.minute ?? null,
-            status: sql.raw(`'${newStatus}'::event_status`),
-            updatedAt: new Date(),
-          } as any)
+          .set(updateData)
           .where(eq(events.id, eventId));
 
         updated++;
@@ -132,7 +153,7 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
     });
 
     await tracker.complete();
-    logger.info('Live scores sync completed', { updated, finished });
+    logger.info('Live scores sync completed', { updated, finished, competitionUpdates });
   } catch (error) {
     await tracker.fail(error as Error);
     logger.error('Live scores sync failed', error);

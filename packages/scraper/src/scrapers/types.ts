@@ -12,6 +12,7 @@ export interface LiveScore {
   period: string;
   minute?: number;
   isFinished: boolean;
+  competitionName?: string; // Competition name from source (for enrichment)
 }
 
 /**

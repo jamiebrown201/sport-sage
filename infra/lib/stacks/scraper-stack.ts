@@ -34,7 +34,15 @@ export class ScraperStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // IPRoyal proxy credentials (stored in Secrets Manager)
+    // Proxy credentials (stored in Secrets Manager)
+    // DataImpulse - PRIMARY ($1/GB)
+    const dataImpulseSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'DataImpulseSecret',
+      'sport-sage/dataimpulse-proxy'
+    );
+
+    // IPRoyal - BACKUP ($1.75/GB)
     const iproyalSecret = secretsmanager.Secret.fromSecretNameV2(
       this,
       'IPRoyalSecret',
@@ -42,12 +50,16 @@ export class ScraperStack extends cdk.Stack {
     );
 
     // Common environment variables
+    // Proxy Manager will use DataImpulse first, then failover to IPRoyal if needed
     const commonEnv = {
       DATABASE_RESOURCE_ARN: databaseCluster.clusterArn,
       DATABASE_SECRET_ARN: databaseSecret.secretArn,
       DATABASE_NAME: 'sportsage',
       SETTLEMENT_QUEUE_URL: settlementQueue.queueUrl,
-      // IPRoyal proxy for fallback sources (Flashscore, ESPN, etc.)
+      // DataImpulse - PRIMARY proxy ($1/GB)
+      DATAIMPULSE_USERNAME: dataImpulseSecret.secretValueFromJson('username').unsafeUnwrap(),
+      DATAIMPULSE_PASSWORD: dataImpulseSecret.secretValueFromJson('password').unsafeUnwrap(),
+      // IPRoyal - BACKUP proxy ($1.75/GB)
       IPROYAL_USERNAME: iproyalSecret.secretValueFromJson('username').unsafeUnwrap(),
       IPROYAL_PASSWORD: iproyalSecret.secretValueFromJson('password').unsafeUnwrap(),
       PROXY_COUNTRY: 'gb',
@@ -72,8 +84,11 @@ export class ScraperStack extends cdk.Stack {
       },
     };
 
-    // Sync Fixtures - every 6 hours
+    // Sync Fixtures - once daily (reduced frequency to save proxy costs)
+    // Looks 7 days ahead, so daily is plenty
+    // Uses ~1GB bandwidth per run, so daily = ~$1/day on DataImpulse
     // Higher memory for Playwright/Chromium - also gives faster CPU
+    // Reserved concurrency = 1 to prevent duplicate runs
     const syncFixturesHandler = new NodejsFunction(this, 'SyncFixtures', {
       ...defaultScraperProps,
       functionName: `sport-sage-${config.environment}-sync-fixtures`,
@@ -81,6 +96,7 @@ export class ScraperStack extends cdk.Stack {
       handler: 'handler',
       memorySize: 2048, // More memory for Chromium and faster CPU
       timeout: cdk.Duration.minutes(10), // Longer timeout for scraping all sports
+      reservedConcurrentExecutions: 1, // Prevent concurrent runs (saves bandwidth)
     });
 
     databaseSecret.grantRead(syncFixturesHandler);
@@ -88,7 +104,7 @@ export class ScraperStack extends cdk.Stack {
 
     new events.Rule(this, 'SyncFixturesSchedule', {
       ruleName: `sport-sage-${config.environment}-sync-fixtures`,
-      schedule: events.Schedule.rate(cdk.Duration.hours(6)),
+      schedule: events.Schedule.rate(cdk.Duration.hours(24)),
       targets: [new targets.LambdaFunction(syncFixturesHandler)],
     });
 

@@ -179,6 +179,7 @@ export interface ScrapedEvent {
   minute?: number;
   isFinished?: boolean;
   startTime?: Date;
+  competitionName?: string; // Competition name from source
   // Source-specific metadata (optional)
   sourceId?: string;
   sourceName?: string;

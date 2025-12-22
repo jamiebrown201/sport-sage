@@ -121,15 +121,23 @@ export class Scores365LiveScoresScraper implements LiveScoresScraper {
           // Skip if not live or finished
           if (!isLive && !isFinished) continue;
 
+          // Some APIs return -1 for no score yet - treat as 0
+          const homeScore = homeTeam.score >= 0 ? homeTeam.score : 0;
+          const awayScore = awayTeam.score >= 0 ? awayTeam.score : 0;
+
+          // Get competition name from API
+          const competitionName = game.competitionDisplayName || undefined;
+
           scrapedEvents.push({
             homeTeam: homeTeam.name || homeTeam.shortName || '',
             awayTeam: awayTeam.name || awayTeam.shortName || '',
-            homeScore: homeTeam.score ?? 0,
-            awayScore: awayTeam.score ?? 0,
+            homeScore,
+            awayScore,
             period: this.parsePeriod(game),
             minute: this.parseMinute(game),
             isFinished,
             startTime: game.startTime ? new Date(game.startTime) : undefined,
+            competitionName,
             sourceId: String(game.id),
             sourceName: '365scores',
           });
@@ -170,6 +178,7 @@ export class Scores365LiveScoresScraper implements LiveScoresScraper {
           period: scraped.period || 'LIVE',
           minute: scraped.minute,
           isFinished: scraped.isFinished ?? false,
+          competitionName: scraped.competitionName,
         });
 
         logger.debug(`365Scores: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +

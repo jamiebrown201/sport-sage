@@ -3,7 +3,7 @@
  */
 
 import { getDb, events, sports, teams, predictions, scraperRuns } from '@sport-sage/database';
-import { gte, lte, and, count, sql, desc } from 'drizzle-orm';
+import { gte, lte, and, count, sql, desc, eq } from 'drizzle-orm';
 import { layout, timeAgo } from '../ui/layout.js';
 
 export async function handleDashboard(environment: string): Promise<string> {
@@ -58,7 +58,7 @@ export async function handleDashboard(environment: string): Promise<string> {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  // Get live events with scores
+  // Get live events with scores and sport info
   const liveEventsList = await db
     .select({
       id: events.id,
@@ -69,8 +69,11 @@ export async function handleDashboard(environment: string): Promise<string> {
       period: events.period,
       competition: events.competitionName,
       updatedAt: events.updatedAt,
+      sportName: sports.name,
+      sportSlug: sports.slug,
     })
     .from(events)
+    .leftJoin(sports, eq(events.sportId, sports.id))
     .where(sql`${events.status}::text = 'live'`)
     .orderBy(desc(events.updatedAt))
     .limit(10);
@@ -104,7 +107,11 @@ export async function handleDashboard(environment: string): Promise<string> {
         return `
           <tr>
             <td><span class="badge badge-warning pulse">${e.period || 'LIVE'}</span></td>
-            <td><a href="/events/${e.id}">${e.homeTeam} vs ${e.awayTeam}</a></td>
+            <td>
+              <span class="badge badge-info" style="font-size: 0.7em; margin-right: 6px;">${e.sportName || e.sportSlug || '?'}</span>
+              <a href="/events/${e.id}">${e.homeTeam} vs ${e.awayTeam}</a>
+              <div style="font-size: 0.8em; color: var(--text-muted);">${e.competition || ''}</div>
+            </td>
             <td style="font-family: monospace;">${score}</td>
             <td class="time-ago">${timeAgo(e.updatedAt)}</td>
           </tr>

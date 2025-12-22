@@ -300,6 +300,70 @@ export class PacketStreamProvider implements ProxyProvider {
 }
 
 /**
+ * DataImpulse - $1/GB residential proxies
+ * Great value, reliable for scraping
+ *
+ * Gateway: gw.dataimpulse.com:823 (HTTP) or :824 (HTTPS)
+ *
+ * Basic format: login:password@gw.dataimpulse.com:823
+ * With options: login:password_country-gb_session-xxx@gw.dataimpulse.com:823
+ *
+ * Options (appended to password with underscores):
+ * - country-XX: Target specific country (e.g., country-gb, country-us)
+ * - session-XXX: Sticky session ID (same IP for rotation interval)
+ * - anonymous-true: Only anonymous proxies
+ */
+export class DataImpulseProvider implements ProxyProvider {
+  name = 'dataimpulse';
+  private username: string;
+  private password: string;
+  private country: string;
+  private failCount = 0;
+  private successCount = 0;
+  private lastFailedAt: number | null = null;
+
+  constructor(options: {
+    username: string;
+    password: string;
+    country?: string;
+  }) {
+    this.username = options.username;
+    this.password = options.password;
+    this.country = options.country || 'gb';
+  }
+
+  async getProxy(): Promise<ProxyConfig> {
+    // DataImpulse uses dashboard configuration for targeting
+    // Basic format: login:password@gw.dataimpulse.com:823
+    // Country and session settings are configured in the DataImpulse dashboard
+    return {
+      server: 'http://gw.dataimpulse.com:823',
+      username: this.username,
+      password: this.password,
+      protocol: 'http',
+    };
+  }
+
+  markFailed(proxy: ProxyConfig): void {
+    this.failCount++;
+    this.lastFailedAt = Date.now();
+  }
+
+  markSuccess(proxy: ProxyConfig): void {
+    this.successCount++;
+  }
+
+  getStats(): { successRate: number; failCount: number; isHealthy: boolean } {
+    const total = this.successCount + this.failCount;
+    const successRate = total > 0 ? this.successCount / total : 1;
+    // Consider unhealthy if >50% failure rate in last 10 requests or failed in last minute
+    const recentlyFailed = this.lastFailedAt && Date.now() - this.lastFailedAt < 60000;
+    const isHealthy = successRate > 0.5 && !recentlyFailed;
+    return { successRate, failCount: this.failCount, isHealthy };
+  }
+}
+
+/**
  * ScraperAPI - 1000 FREE requests/month, then $49/100k
  * Handles proxies, CAPTCHAs, and JavaScript for you
  */
@@ -358,145 +422,307 @@ export class ScraperAPIProvider implements ProxyProvider {
 }
 
 /**
- * Main Proxy Manager - handles rotation across multiple providers
+ * Provider health tracking for intelligent failover
+ */
+interface ProviderHealth {
+  provider: ProxyProvider;
+  successCount: number;
+  failCount: number;
+  consecutiveFailures: number;
+  lastFailedAt: number | null;
+  lastUsedAt: number;
+  cooldownUntil: number | null;
+}
+
+/**
+ * Main Proxy Manager - handles rotation across multiple providers with intelligent failover
+ *
+ * Features:
+ * - Automatic failover when a provider fails
+ * - Cooldown period for failing providers
+ * - Priority-based provider selection (cheapest first)
+ * - Health tracking per provider
  */
 export class ProxyManager {
-  private providers: ProxyProvider[] = [];
-  private currentProviderIndex = 0;
+  private providerHealth: ProviderHealth[] = [];
   private enabled = false;
+  private readonly COOLDOWN_MS = 5 * 60 * 1000; // 5 minute cooldown after failures
+  private readonly MAX_CONSECUTIVE_FAILURES = 3; // Trigger cooldown after 3 failures
 
   constructor() {
     this.initializeFromEnv();
   }
 
-  private initializeFromEnv(): void {
-    // Priority order: FREE options first, then cheapest paid options
+  private addProviderWithHealth(provider: ProxyProvider): void {
+    this.providerHealth.push({
+      provider,
+      successCount: 0,
+      failCount: 0,
+      consecutiveFailures: 0,
+      lastFailedAt: null,
+      lastUsedAt: 0,
+      cooldownUntil: null,
+    });
+    this.enabled = true;
+  }
 
-    // 1. ScraperAPI - FREE tier (1000 requests/month)
-    if (process.env.SCRAPERAPI_KEY) {
-      this.providers.push(new ScraperAPIProvider({
-        apiKey: process.env.SCRAPERAPI_KEY,
+  private initializeFromEnv(): void {
+    // Priority order: Cheapest first, with failover to more expensive options
+
+    // 1. DataImpulse - CHEAPEST ($1/GB) - PRIMARY
+    if (process.env.DATAIMPULSE_USERNAME && process.env.DATAIMPULSE_PASSWORD) {
+      this.addProviderWithHealth(new DataImpulseProvider({
+        username: process.env.DATAIMPULSE_USERNAME,
+        password: process.env.DATAIMPULSE_PASSWORD,
         country: process.env.PROXY_COUNTRY || 'gb',
-        monthlyLimit: parseInt(process.env.SCRAPERAPI_LIMIT || '1000'),
       }));
-      this.enabled = true;
-      console.log('Proxy: ScraperAPI enabled (FREE tier: 1000 req/month)');
+      console.log('Proxy: DataImpulse enabled ($1/GB) [PRIMARY]');
     }
 
-    // 2. IPRoyal - CHEAP ($1.75/GB, low minimum)
+    // 2. PacketStream - CHEAPEST ($1/GB) - BACKUP
+    if (process.env.PACKETSTREAM_API_KEY) {
+      this.addProviderWithHealth(new PacketStreamProvider({
+        apiKey: process.env.PACKETSTREAM_API_KEY,
+        country: process.env.PROXY_COUNTRY || 'GB',
+      }));
+      console.log('Proxy: PacketStream enabled ($1/GB)');
+    }
+
+    // 3. IPRoyal - CHEAP ($1.75/GB) - BACKUP
     if (process.env.IPROYAL_USERNAME && process.env.IPROYAL_PASSWORD) {
-      this.providers.push(new IPRoyalProvider({
+      this.addProviderWithHealth(new IPRoyalProvider({
         username: process.env.IPROYAL_USERNAME,
         password: process.env.IPROYAL_PASSWORD,
         country: process.env.PROXY_COUNTRY || 'gb',
       }));
-      this.enabled = true;
       console.log('Proxy: IPRoyal enabled ($1.75/GB)');
     }
 
-    // 3. PacketStream - CHEAPEST ($1/GB)
-    if (process.env.PACKETSTREAM_API_KEY) {
-      this.providers.push(new PacketStreamProvider({
-        apiKey: process.env.PACKETSTREAM_API_KEY,
-        country: process.env.PROXY_COUNTRY || 'GB',
+    // 4. ScraperAPI - FREE tier (1000 requests/month) - FALLBACK
+    if (process.env.SCRAPERAPI_KEY) {
+      this.addProviderWithHealth(new ScraperAPIProvider({
+        apiKey: process.env.SCRAPERAPI_KEY,
+        country: process.env.PROXY_COUNTRY || 'gb',
+        monthlyLimit: parseInt(process.env.SCRAPERAPI_LIMIT || '1000'),
       }));
-      this.enabled = true;
-      console.log('Proxy: PacketStream enabled ($1/GB)');
+      console.log('Proxy: ScraperAPI enabled (FREE tier: 1000 req/month)');
     }
 
-    // 4. SmartProxy/Decodo (~$6-8/GB)
+    // 5. SmartProxy/Decodo (~$6-8/GB)
     if (process.env.SMARTPROXY_USERNAME && process.env.SMARTPROXY_PASSWORD) {
-      this.providers.push(new SmartProxyProvider({
+      this.addProviderWithHealth(new SmartProxyProvider({
         username: process.env.SMARTPROXY_USERNAME,
         password: process.env.SMARTPROXY_PASSWORD,
         country: process.env.PROXY_COUNTRY || 'gb',
       }));
-      this.enabled = true;
       console.log('Proxy: SmartProxy enabled (~$6-8/GB)');
     }
 
-    // 5. Oxylabs (~$8/GB)
+    // 6. Oxylabs (~$8/GB)
     if (process.env.OXYLABS_USERNAME && process.env.OXYLABS_PASSWORD) {
-      this.providers.push(new OxylabsProvider({
+      this.addProviderWithHealth(new OxylabsProvider({
         username: process.env.OXYLABS_USERNAME,
         password: process.env.OXYLABS_PASSWORD,
         country: process.env.PROXY_COUNTRY || 'gb',
       }));
-      this.enabled = true;
       console.log('Proxy: Oxylabs enabled (~$8/GB)');
     }
 
-    // 6. Bright Data - Premium (~$10-17/GB)
+    // 7. Bright Data - Premium (~$10-17/GB)
     if (process.env.BRIGHTDATA_USERNAME && process.env.BRIGHTDATA_PASSWORD) {
-      this.providers.push(new BrightDataProvider({
+      this.addProviderWithHealth(new BrightDataProvider({
         username: process.env.BRIGHTDATA_USERNAME,
         password: process.env.BRIGHTDATA_PASSWORD,
         country: process.env.PROXY_COUNTRY || 'gb',
       }));
-      this.enabled = true;
       console.log('Proxy: Bright Data enabled (~$10-17/GB)');
     }
 
-    // 7. Static proxy list (user-provided)
+    // 8. Static proxy list (user-provided)
     if (process.env.PROXY_LIST) {
       const proxies = process.env.PROXY_LIST.split(',').map(p => {
         const [server, username, password] = p.trim().split('|');
         return { server, username, password } as ProxyConfig;
       });
       if (proxies.length > 0) {
-        this.providers.push(new StaticProxyProvider(proxies));
-        this.enabled = true;
+        this.addProviderWithHealth(new StaticProxyProvider(proxies));
         console.log(`Proxy: Static list enabled (${proxies.length} proxies)`);
       }
+    }
+
+    if (this.providerHealth.length > 0) {
+      console.log(`Proxy Manager: ${this.providerHealth.length} provider(s) configured with failover`);
     }
   }
 
   addProvider(provider: ProxyProvider): void {
-    this.providers.push(provider);
-    this.enabled = true;
+    this.addProviderWithHealth(provider);
   }
 
   isEnabled(): boolean {
-    return this.enabled && this.providers.length > 0;
+    return this.enabled && this.providerHealth.length > 0;
   }
 
+  /**
+   * Get a proxy from the best available provider
+   * Uses intelligent selection with failover
+   */
   async getProxy(): Promise<ProxyConfig | null> {
-    if (!this.enabled || this.providers.length === 0) {
+    if (!this.enabled || this.providerHealth.length === 0) {
       return null;
     }
 
-    // Round-robin through providers
-    const provider = this.providers[this.currentProviderIndex];
-    this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providers.length;
+    const now = Date.now();
 
-    try {
-      return await provider.getProxy();
-    } catch (error) {
-      console.error(`Failed to get proxy from ${provider.name}:`, error);
-      // Try next provider
-      if (this.providers.length > 1) {
-        const nextProvider = this.providers[this.currentProviderIndex];
-        return await nextProvider.getProxy();
+    // Find available providers (not in cooldown)
+    const availableProviders = this.providerHealth.filter(
+      ph => !ph.cooldownUntil || now > ph.cooldownUntil
+    );
+
+    if (availableProviders.length === 0) {
+      // All providers in cooldown - use the one with earliest cooldown end
+      console.warn('All proxy providers in cooldown, using least-recently-failed');
+      const sorted = [...this.providerHealth].sort(
+        (a, b) => (a.cooldownUntil || 0) - (b.cooldownUntil || 0)
+      );
+      const health = sorted[0];
+      health.cooldownUntil = null; // Reset cooldown
+      health.lastUsedAt = now;
+      try {
+        return await health.provider.getProxy();
+      } catch (error) {
+        console.error(`Failed to get proxy from ${health.provider.name}:`, error);
+        return null;
       }
-      return null;
     }
+
+    // Try providers in order (they're already sorted by priority/cost)
+    for (const health of availableProviders) {
+      try {
+        health.lastUsedAt = now;
+        const proxy = await health.provider.getProxy();
+
+        // Tag proxy with provider name for tracking
+        (proxy as any).__providerName = health.provider.name;
+
+        return proxy;
+      } catch (error) {
+        console.error(`Failed to get proxy from ${health.provider.name}:`, error);
+        health.consecutiveFailures++;
+        health.failCount++;
+        health.lastFailedAt = now;
+
+        // Put provider in cooldown if too many failures
+        if (health.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+          health.cooldownUntil = now + this.COOLDOWN_MS;
+          console.warn(`Provider ${health.provider.name} in cooldown for ${this.COOLDOWN_MS / 1000}s`);
+        }
+        // Continue to next provider
+      }
+    }
+
+    console.error('All proxy providers failed');
+    return null;
   }
 
+  /**
+   * Mark a proxy request as failed - triggers failover logic
+   */
   markFailed(proxy: ProxyConfig): void {
-    // Notify all providers (the right one will handle it)
-    for (const provider of this.providers) {
-      provider.markFailed(proxy);
+    const providerName = (proxy as any).__providerName;
+    const health = providerName
+      ? this.providerHealth.find(ph => ph.provider.name === providerName)
+      : this.providerHealth.find(ph => proxy.server.includes(this.getProviderDomain(ph.provider.name)));
+
+    if (health) {
+      health.failCount++;
+      health.consecutiveFailures++;
+      health.lastFailedAt = Date.now();
+
+      // Put provider in cooldown if too many consecutive failures
+      if (health.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+        health.cooldownUntil = Date.now() + this.COOLDOWN_MS;
+        console.warn(`Provider ${health.provider.name} in cooldown after ${health.consecutiveFailures} failures`);
+      }
+
+      health.provider.markFailed(proxy);
     }
   }
 
+  /**
+   * Mark a proxy request as successful - resets failure counters
+   */
   markSuccess(proxy: ProxyConfig): void {
-    for (const provider of this.providers) {
-      provider.markSuccess(proxy);
+    const providerName = (proxy as any).__providerName;
+    const health = providerName
+      ? this.providerHealth.find(ph => ph.provider.name === providerName)
+      : this.providerHealth.find(ph => proxy.server.includes(this.getProviderDomain(ph.provider.name)));
+
+    if (health) {
+      health.successCount++;
+      health.consecutiveFailures = 0; // Reset on success
+      health.cooldownUntil = null; // Clear any cooldown
+      health.provider.markSuccess(proxy);
     }
+  }
+
+  /**
+   * Get domain hint for provider matching
+   */
+  private getProviderDomain(name: string): string {
+    const domains: Record<string, string> = {
+      dataimpulse: 'dataimpulse.com',
+      iproyal: 'iproyal.com',
+      packetstream: 'packetstream.io',
+      smartproxy: 'smartproxy.com',
+      oxylabs: 'oxylabs.io',
+      brightdata: 'superproxy.io',
+      scraperapi: 'scraperapi.com',
+    };
+    return domains[name] || name;
   }
 
   getProviderNames(): string[] {
-    return this.providers.map(p => p.name);
+    return this.providerHealth.map(ph => ph.provider.name);
+  }
+
+  /**
+   * Get health stats for all providers
+   */
+  getStats(): Array<{
+    name: string;
+    successCount: number;
+    failCount: number;
+    successRate: number;
+    inCooldown: boolean;
+    consecutiveFailures: number;
+  }> {
+    return this.providerHealth.map(ph => {
+      const total = ph.successCount + ph.failCount;
+      return {
+        name: ph.provider.name,
+        successCount: ph.successCount,
+        failCount: ph.failCount,
+        successRate: total > 0 ? ph.successCount / total : 1,
+        inCooldown: ph.cooldownUntil !== null && Date.now() < ph.cooldownUntil,
+        consecutiveFailures: ph.consecutiveFailures,
+      };
+    });
+  }
+
+  /**
+   * Log current provider health status
+   */
+  logStats(): void {
+    const stats = this.getStats();
+    console.log('Proxy Provider Health:');
+    for (const stat of stats) {
+      const status = stat.inCooldown ? '⏸️ COOLDOWN' : '✅ ACTIVE';
+      console.log(
+        `  ${stat.name}: ${status} | Success: ${stat.successCount}/${stat.successCount + stat.failCount} ` +
+        `(${(stat.successRate * 100).toFixed(0)}%) | Consecutive failures: ${stat.consecutiveFailures}`
+      );
+    }
   }
 }
 

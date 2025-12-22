@@ -130,6 +130,12 @@ export class ESPNLiveScoresScraper implements LiveScoresScraper {
           // Skip if not live or finished
           if (!isLive && !isFinished) continue;
 
+          // Get competition/league name
+          const competitionName = event.competitions?.[0]?.league?.name
+            || event.league?.name
+            || event.competitions?.[0]?.league?.abbreviation
+            || undefined;
+
           scrapedEvents.push({
             homeTeam: homeTeam.team?.displayName || homeTeam.team?.name || '',
             awayTeam: awayTeam.team?.displayName || awayTeam.team?.name || '',
@@ -139,6 +145,7 @@ export class ESPNLiveScoresScraper implements LiveScoresScraper {
             minute: this.parseMinute(status),
             isFinished,
             startTime: event.date ? new Date(event.date) : undefined,
+            competitionName,
             sourceId: event.id,
             sourceName: 'espn',
           });
@@ -179,6 +186,7 @@ export class ESPNLiveScoresScraper implements LiveScoresScraper {
           period: scraped.period || 'LIVE',
           minute: scraped.minute,
           isFinished: scraped.isFinished ?? false,
+          competitionName: scraped.competitionName,
         });
 
         logger.debug(`ESPN: Matched "${scraped.homeTeam} vs ${scraped.awayTeam}" ` +
