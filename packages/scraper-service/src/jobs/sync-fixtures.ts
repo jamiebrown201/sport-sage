@@ -379,7 +379,7 @@ async function parseMatchElement(
     if (!id) {
       if (shouldDebug) {
         debugCount++;
-        logger.debug('parseMatchElement: no ID attribute');
+        logger.warn('parseMatchElement: no ID attribute');
       }
       return null;
     }
@@ -395,7 +395,7 @@ async function parseMatchElement(
         // Get element's class names for debugging
         const classes = await element.getAttribute('class');
         const innerHtml = await element.evaluate((el: Element) => el.innerHTML?.substring(0, 500));
-        logger.debug('parseMatchElement: missing team names', {
+        logger.warn('parseMatchElement: missing team names', {
           id,
           homeTeam,
           awayTeam,
@@ -412,7 +412,7 @@ async function parseMatchElement(
     if (!startTime) {
       if (shouldDebug) {
         debugCount++;
-        logger.debug('parseMatchElement: failed to parse time', {
+        logger.warn('parseMatchElement: failed to parse time', {
           id,
           homeTeam,
           awayTeam,
@@ -434,7 +434,7 @@ async function parseMatchElement(
   } catch (error) {
     if (shouldDebug) {
       debugCount++;
-      logger.debug('parseMatchElement: exception', { error });
+      logger.warn('parseMatchElement: exception', { error });
     }
     return null;
   }
