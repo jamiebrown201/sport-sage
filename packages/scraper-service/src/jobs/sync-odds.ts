@@ -476,66 +476,66 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
       logger.info(`OddsPortal: Found ${jsonLdEvents.length} events from JSON-LD`);
     }
 
-    // Extract events with odds from DOM
-    const scrapedEvents = await page.evaluate((sport) => {
+    // Extract events with odds from DOM using OddsPortal's specific structure
+    const scrapedEvents = await page.evaluate(() => {
       const results: Array<{
         homeTeam: string;
         awayTeam: string;
         odds: { home: string; draw: string; away: string } | null;
       }> = [];
 
-      // Try eventRow structure (Vue.js based OddsPortal)
-      const eventRows = document.querySelectorAll('[class*="eventRow"], [class*="event-row"]');
+      // OddsPortal uses eventRow class for each match
+      const eventRows = document.querySelectorAll('.eventRow, [class*="eventRow"]');
 
       eventRows.forEach((row) => {
         try {
-          const rowText = row.textContent || '';
+          // Get team names from .participant-name elements
+          const participantNames = row.querySelectorAll('.participant-name');
+          if (participantNames.length < 2) return;
 
-          // Find team names from links or text patterns
-          const links = row.querySelectorAll('a');
-          const teamLinks: string[] = [];
-          links.forEach((link) => {
-            const href = link.getAttribute('href') || '';
-            const text = link.textContent?.trim() || '';
-            if (
-              (href.includes('/match/') || href.includes(`/${sport}/`)) &&
-              text.length > 2 &&
-              text.length < 50
-            ) {
-              teamLinks.push(text);
+          const homeTeam = participantNames[0]?.textContent?.trim() || '';
+          const awayTeam = participantNames[1]?.textContent?.trim() || '';
+
+          if (!homeTeam || !awayTeam || homeTeam.length < 2 || awayTeam.length < 2) return;
+
+          // Get odds from data-testid elements
+          // For 2-way markets (basketball): odd-container-winning (home), odd-container-default (away)
+          // For 3-way markets (football): there would be 3 odds containers
+          const winningOdds = row.querySelector('[data-testid="odd-container-winning"]');
+          const defaultOdds = row.querySelector('[data-testid="odd-container-default"]');
+
+          // Also check for all p elements with data-testid containing "odd"
+          const allOddsElements = row.querySelectorAll('p[data-testid*="odd-container"]');
+          const oddsValues: string[] = [];
+
+          allOddsElements.forEach((el) => {
+            const text = el.textContent?.trim() || '';
+            // Must be a decimal number like "1.26" or "3.94"
+            if (/^\d+\.\d+$/.test(text)) {
+              oddsValues.push(text);
             }
           });
 
-          let homeTeam = '';
-          let awayTeam = '';
+          // Fallback: try to get from specific elements
+          if (oddsValues.length === 0) {
+            const homeOdds = winningOdds?.textContent?.trim() || '';
+            const awayOdds = defaultOdds?.textContent?.trim() || '';
+            if (/^\d+\.\d+$/.test(homeOdds)) oddsValues.push(homeOdds);
+            if (/^\d+\.\d+$/.test(awayOdds)) oddsValues.push(awayOdds);
+          }
 
-          if (teamLinks.length >= 2) {
-            homeTeam = teamLinks[0];
-            awayTeam = teamLinks[1];
-          } else {
-            // Try pattern matching
-            const matchPattern = rowText.match(
-              /([A-Za-z][A-Za-z0-9\s\.'-]+)\s*[-–]\s*([A-Za-z][A-Za-z0-9\s\.'-]+)/
-            );
-            if (matchPattern) {
-              homeTeam = matchPattern[1].trim();
-              awayTeam = matchPattern[2].trim();
+          let oddsData: { home: string; draw: string; away: string } | null = null;
+          if (oddsValues.length >= 2) {
+            if (oddsValues.length === 2) {
+              // 2-way market (basketball, tennis)
+              oddsData = { home: oddsValues[0]!, draw: '', away: oddsValues[1]! };
+            } else if (oddsValues.length >= 3) {
+              // 3-way market (football)
+              oddsData = { home: oddsValues[0]!, draw: oddsValues[1]!, away: oddsValues[2]! };
             }
           }
 
-          if (homeTeam && awayTeam && homeTeam.length > 2 && awayTeam.length > 2) {
-            // Find odds (decimal numbers)
-            const oddsMatches = rowText.match(/\d+\.\d{1,2}/g) || [];
-            let oddsData: { home: string; draw: string; away: string } | null = null;
-
-            if (oddsMatches.length >= 2) {
-              if (oddsMatches.length === 2) {
-                oddsData = { home: oddsMatches[0]!, draw: '', away: oddsMatches[1]! };
-              } else if (oddsMatches.length >= 3) {
-                oddsData = { home: oddsMatches[0]!, draw: oddsMatches[1]!, away: oddsMatches[2]! };
-              }
-            }
-
+          if (oddsData) {
             results.push({ homeTeam, awayTeam, odds: oddsData });
           }
         } catch {
@@ -543,39 +543,8 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
         }
       });
 
-      // Also try table structure for older OddsPortal pages
-      if (results.length === 0) {
-        const tableRows = document.querySelectorAll('table tbody tr');
-        tableRows.forEach((row) => {
-          try {
-            const rowText = row.textContent || '';
-            const matchPattern = rowText.match(
-              /([A-Za-z][A-Za-z0-9\s\.'-]+)\s*[-–]\s*([A-Za-z][A-Za-z0-9\s\.'-]+)/
-            );
-            if (matchPattern) {
-              const homeTeam = matchPattern[1].trim();
-              const awayTeam = matchPattern[2].trim();
-              const oddsMatches = rowText.match(/\d+\.\d{1,2}/g) || [];
-              let oddsData: { home: string; draw: string; away: string } | null = null;
-              if (oddsMatches.length >= 2) {
-                oddsData = {
-                  home: oddsMatches[0]!,
-                  draw: oddsMatches.length >= 3 ? oddsMatches[1]! : '',
-                  away: oddsMatches[oddsMatches.length >= 3 ? 2 : 1]!,
-                };
-              }
-              if (homeTeam.length > 2 && awayTeam.length > 2) {
-                results.push({ homeTeam, awayTeam, odds: oddsData });
-              }
-            }
-          } catch {
-            // Skip
-          }
-        });
-      }
-
       return results;
-    }, sportSlug);
+    });
 
     logger.info(`OddsPortal: DOM parsing found ${scrapedEvents.length} events`);
 
