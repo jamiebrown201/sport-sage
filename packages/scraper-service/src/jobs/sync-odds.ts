@@ -179,7 +179,7 @@ async function parseOddsRow(row: any): Promise<NormalizedOdds | null> {
     );
 
     // Filter valid odds
-    const validOdds = oddsValues.filter((o): o is number => o !== null && !isNaN(o) && o > 1);
+    const validOdds = oddsValues.filter((o: number | null): o is number => o !== null && !isNaN(o) && o > 1);
 
     if (validOdds.length < 2) return null;
 

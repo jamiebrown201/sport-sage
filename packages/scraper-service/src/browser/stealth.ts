@@ -117,7 +117,7 @@ export async function applyStealthMode(page: Page): Promise<void> {
       audioContext.prototype.createAnalyser = function () {
         const analyser = originalCreateAnalyser.call(this);
         const originalGetFloatFrequencyData = analyser.getFloatFrequencyData.bind(analyser);
-        analyser.getFloatFrequencyData = function (array: Float32Array) {
+        analyser.getFloatFrequencyData = function (array: Float32Array<ArrayBuffer>) {
           originalGetFloatFrequencyData(array);
           for (let i = 0; i < array.length; i += 10) {
             array[i] = array[i] + (Math.random() * 0.0001 - 0.00005);

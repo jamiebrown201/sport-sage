@@ -8,7 +8,7 @@
  * For VPS deployment, set DATABASE_URL environment variable.
  */
 
-import { getDb as getSharedDb } from '@sport-sage/database';
+import { getDb as getSharedDb, type Database } from '@sport-sage/database';
 import pg from 'pg';
 import { logger } from '../logger.js';
 
@@ -63,7 +63,7 @@ export function initializeDatabase(): void {
  * Get the Drizzle database instance
  * Uses the shared package which handles the connection
  */
-export function getDb() {
+export function getDb(): Database {
   return getSharedDb();
 }
 
