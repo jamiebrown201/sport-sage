@@ -17,8 +17,11 @@ import { simulateHumanBehavior, waitWithJitter } from '../browser/behavior.js';
 // Import scraper classes - these will be copied from the existing scraper package
 // For now, we'll inline a simplified version
 import type { Page } from 'playwright';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 
 const logger = createJobLogger('sync-fixtures');
+const DEBUG_DIR = '/tmp/scraper-debug';
 
 const SPORTS_TO_SYNC = ['football', 'tennis', 'basketball', 'darts', 'cricket'] as const;
 
@@ -153,6 +156,42 @@ export async function runSyncFixtures(): Promise<void> {
   }
 }
 
+// Debug helper - save screenshot and HTML for analysis
+async function saveDebugInfo(page: Page, name: string): Promise<void> {
+  try {
+    await mkdir(DEBUG_DIR, { recursive: true });
+    const timestamp = Date.now();
+
+    // Save screenshot
+    const screenshotPath = join(DEBUG_DIR, `${name}-${timestamp}.png`);
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    logger.info(`Debug screenshot saved: ${screenshotPath}`);
+
+    // Save HTML
+    const htmlPath = join(DEBUG_DIR, `${name}-${timestamp}.html`);
+    const html = await page.content();
+    await writeFile(htmlPath, html);
+    logger.info(`Debug HTML saved: ${htmlPath}`);
+
+    // Log URL and title
+    const url = page.url();
+    const title = await page.title();
+    logger.info(`Page info: ${url} - "${title}"`);
+
+    // Log any cookie consent or blocking indicators
+    const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '');
+    if (bodyText.toLowerCase().includes('cookie') ||
+        bodyText.toLowerCase().includes('consent') ||
+        bodyText.toLowerCase().includes('captcha') ||
+        bodyText.toLowerCase().includes('blocked') ||
+        bodyText.toLowerCase().includes('access denied')) {
+      logger.warn(`Potential blocking detected. Body preview: ${bodyText.substring(0, 500)}`);
+    }
+  } catch (error) {
+    logger.error('Failed to save debug info', { error });
+  }
+}
+
 // Simplified fixture scraper - this is inlined from the existing scraper
 // In production, you might want to share this code properly
 async function scrapeFlashscoreFixtures(
@@ -169,14 +208,33 @@ async function scrapeFlashscoreFixtures(
 
   for (const { url, competition } of competitionUrls) {
     try {
+      logger.info(`Navigating to: ${url}`);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await waitWithJitter(500, 20);
+      await waitWithJitter(1500, 20); // Increased wait time for content to load
+
+      // Try to handle cookie consent if present
+      try {
+        const consentButton = await page.$('#onetrust-accept-btn-handler');
+        if (consentButton) {
+          logger.info('Cookie consent banner detected, clicking accept');
+          await consentButton.click();
+          await waitWithJitter(1000, 10);
+        }
+      } catch {
+        // No consent banner, continue
+      }
 
       // Wait for match elements
       const selector = await waitForMatchElements(page);
-      if (!selector) continue;
+      if (!selector) {
+        logger.warn(`No match elements found for ${competition}`);
+        // Save debug info when no matches are found
+        await saveDebugInfo(page, `${sportSlug}-${competition.replace(/[^a-z0-9]/gi, '-')}`);
+        continue;
+      }
 
       const matches = await page.$$(selector);
+      logger.info(`Found ${matches.length} match elements using selector: ${selector}`);
 
       for (const match of matches) {
         const fixture = await parseMatchElement(match, sportSlug, competition);
@@ -184,8 +242,11 @@ async function scrapeFlashscoreFixtures(
           fixtures.push(fixture);
         }
       }
+
+      logger.info(`Parsed ${fixtures.length} valid fixtures from ${competition}`);
     } catch (error) {
       logger.warn(`Failed to scrape ${competition}`, { error });
+      await saveDebugInfo(page, `error-${sportSlug}-${competition.replace(/[^a-z0-9]/gi, '-')}`);
     }
   }
 
@@ -263,16 +324,38 @@ function getCompetitionUrls(sportSlug: string): Array<{ url: string; competition
 }
 
 async function waitForMatchElements(page: Page): Promise<string | null> {
-  const selectors = ['.event__match', '.event__match--scheduled', '[class*="event__match"]'];
+  // Possible selectors for match elements across different sports
+  const selectors = [
+    '.event__match',           // Standard selector
+    '.event__match--scheduled', // Scheduled matches only
+    '.event__match--live',     // Live matches
+    '[class*="event__match"]', // Partial match
+    '.sportName .event__match', // Under sport container
+  ];
 
   for (const selector of selectors) {
     try {
       await page.waitForSelector(selector, { timeout: 15000 });
       const count = await page.$$(selector).then((els) => els.length);
-      if (count > 0) return selector;
+      if (count > 0) {
+        logger.info(`Found matches with selector: ${selector} (${count} elements)`);
+        return selector;
+      }
     } catch {
       continue;
     }
+  }
+
+  // Last resort - check if the page has any events at all
+  try {
+    const hasEvents = await page.$('.sportName');
+    if (hasEvents) {
+      logger.debug('Sport container found but no matches - possibly no scheduled games');
+    } else {
+      logger.warn('No sport container found - page may not have loaded properly');
+    }
+  } catch {
+    // Ignore
   }
 
   return null;
@@ -314,15 +397,48 @@ async function parseMatchElement(
 }
 
 async function getParticipantName(element: any, type: 'home' | 'away'): Promise<string | null> {
+  // Flashscore uses different class names for different sports/layouts
   const selectors =
     type === 'home'
-      ? ['.event__participant--home', '.event__homeParticipant']
-      : ['.event__participant--away', '.event__awayParticipant'];
+      ? [
+          '.event__participant--home',
+          '.event__homeParticipant',
+          '.duelParticipant--home',
+          '.participant__participantName--home',
+          '.event__participant:first-of-type',
+        ]
+      : [
+          '.event__participant--away',
+          '.event__awayParticipant',
+          '.duelParticipant--away',
+          '.participant__participantName--away',
+          '.event__participant:last-of-type',
+        ];
 
   for (const selector of selectors) {
     try {
       const text = await element.$eval(selector, (el: Element) => el.textContent?.trim());
       if (text) return text;
+    } catch {
+      continue;
+    }
+  }
+
+  // Fallback: try to get all participants and pick by index
+  const participantSelectors = [
+    '.event__participant',
+    '.participant__participantName',
+    '.participant__participantNameWrapper',
+  ];
+
+  for (const selector of participantSelectors) {
+    try {
+      const participants = await element.$$eval(selector, (els: Element[]) =>
+        els.map((el) => el.textContent?.trim()).filter(Boolean)
+      );
+      if (participants.length >= 2) {
+        return type === 'home' ? participants[0] : participants[1];
+      }
     } catch {
       continue;
     }

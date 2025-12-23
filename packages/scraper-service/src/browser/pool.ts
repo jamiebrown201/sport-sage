@@ -244,6 +244,7 @@ class BrowserPool {
 
     const page = await context.newPage();
     await applyStealthMode(page);
+    await configureRouteBlocking(page);
 
     return {
       page,
@@ -370,4 +371,80 @@ function getRealisticHeaders(): Record<string, string> {
     'Cache-Control': 'max-age=0',
     DNT: Math.random() > 0.5 ? '1' : '0',
   };
+}
+
+// Resources to block for faster page loads and reduced bandwidth
+const BLOCKED_RESOURCE_TYPES = ['image', 'media', 'font', 'stylesheet', 'texttrack', 'eventsource', 'websocket', 'manifest', 'other'];
+const BLOCKED_DOMAINS = [
+  // Analytics & tracking
+  'googletagmanager.com',
+  'google-analytics.com',
+  'analytics.google.com',
+  'doubleclick.net',
+  'googlesyndication.com',
+  'googleadservices.com',
+  'facebook.net',
+  'facebook.com',
+  'twitter.com',
+  'connect.facebook.net',
+  // Ad networks
+  'ads.',
+  'ad.',
+  'adserver.',
+  'analytics.',
+  'tracking.',
+  'pixel.',
+  'beacon.',
+  // Common third-party scripts
+  'hotjar.com',
+  'clarity.ms',
+  'newrelic.com',
+  'sentry.io',
+  'segment.com',
+  'mixpanel.com',
+  'amplitude.com',
+  'intercom.io',
+  'crisp.chat',
+  'tawk.to',
+  'onesignal.com',
+  'pusher.com',
+  // CDNs we don't need (fonts, icons)
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+  'use.fontawesome.com',
+  'kit.fontawesome.com',
+];
+
+/**
+ * Configure route blocking to reduce bandwidth and improve performance
+ * Blocks images, fonts, CSS, analytics, and third-party scripts
+ */
+async function configureRouteBlocking(page: Page): Promise<void> {
+  await page.route('**/*', (route) => {
+    const request = route.request();
+    const resourceType = request.resourceType();
+    const url = request.url();
+
+    // Block heavy resource types (images, fonts, CSS, etc.)
+    if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
+      return route.abort();
+    }
+
+    // Block tracking/analytics/ad domains
+    if (BLOCKED_DOMAINS.some((domain) => url.includes(domain))) {
+      return route.abort();
+    }
+
+    // Block third-party scripts (only allow flashscore.com and sofascore.com scripts)
+    if (resourceType === 'script' &&
+        !url.includes('flashscore.com') &&
+        !url.includes('sofascore.com') &&
+        !url.includes('oddsportal.com')) {
+      return route.abort();
+    }
+
+    return route.continue();
+  });
+
+  logger.debug('Route blocking configured - blocking images, fonts, CSS, analytics, third-party scripts');
 }
