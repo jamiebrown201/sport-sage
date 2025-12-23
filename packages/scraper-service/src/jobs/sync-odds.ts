@@ -82,6 +82,11 @@ export async function runSyncOdds(): Promise<void> {
 
   logger.info(`Found ${upcomingEvents.length} events to sync odds for`);
 
+  // Debug: Log all database events we're trying to match
+  for (const evt of upcomingEvents) {
+    logger.info(`DB Event: ${evt.homeTeamName} vs ${evt.awayTeamName}`);
+  }
+
   let totalUpdated = 0;
 
   try {
@@ -136,11 +141,20 @@ export async function runSyncOdds(): Promise<void> {
 
       logger.info(`Got ${scrapedOdds.length} events with odds for ${sportSlug}`);
 
+      // Debug: Log first few scraped odds
+      if (scrapedOdds.length > 0) {
+        logger.info(`Sample scraped odds: ${scrapedOdds.slice(0, 3).map(o => `${o.homeTeam} vs ${o.awayTeam}`).join(', ')}`);
+      }
+
       // Match scraped odds to our events
       for (const evt of upcomingEvents) {
+        // Debug: Log each event we're trying to match
+        logger.debug(`Trying to match: ${evt.homeTeamName} vs ${evt.awayTeamName}`);
+
         const matched = matchEventToOdds(evt, scrapedOdds);
 
         if (matched) {
+          logger.info(`Matched: ${evt.homeTeamName} vs ${evt.awayTeamName} -> ${matched.homeTeam} vs ${matched.awayTeam}`);
           await updateEventOdds(db, evt, matched);
           totalUpdated++;
         }
