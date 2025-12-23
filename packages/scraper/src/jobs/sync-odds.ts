@@ -54,6 +54,8 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
     let totalUpdated = 0;
 
     // For each sport, scrape odds and match to events
+    resetMatchStats();
+
     for (const sportSlug of ['football', 'tennis', 'basketball', 'hockey', 'baseball']) {
       logger.info(`Syncing odds for ${sportSlug}`);
 
@@ -84,6 +86,7 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
     }
 
     orchestrator.logSummary();
+    logMatchStats();
 
     // Record stats for monitoring
     tracker.recordSportStats('all', {
@@ -107,6 +110,10 @@ export const handler: ScheduledHandler = async (event, context: Context) => {
 
 const MATCH_THRESHOLD = 0.75; // Lower than auto-learn (0.85) for matching existing events
 
+// Track match attempts for debugging
+let matchAttempts = 0;
+let matchSuccesses = 0;
+
 function matchEventToScrapedOdds(
   event: any,
   scrapedOdds: NormalizedOdds[]
@@ -116,7 +123,10 @@ function matchEventToScrapedOdds(
 
   if (!eventHome || !eventAway) return null;
 
+  matchAttempts++;
+
   let bestMatch: { odds: NormalizedOdds; confidence: number } | null = null;
+  let bestSimilarity = 0;
 
   for (const odds of scrapedOdds) {
     const scrapedHome = normalizeTeamName(odds.homeTeam);
@@ -125,6 +135,12 @@ function matchEventToScrapedOdds(
     // Use combined similarity (Levenshtein + token matching)
     const homeSimilarity = combinedSimilarity(eventHome, scrapedHome);
     const awaySimilarity = combinedSimilarity(eventAway, scrapedAway);
+    const avgSim = (homeSimilarity + awaySimilarity) / 2;
+
+    // Track best similarity for logging
+    if (avgSim > bestSimilarity) {
+      bestSimilarity = avgSim;
+    }
 
     // Both teams must meet threshold
     if (homeSimilarity >= MATCH_THRESHOLD && awaySimilarity >= MATCH_THRESHOLD) {
@@ -137,10 +153,25 @@ function matchEventToScrapedOdds(
   }
 
   if (bestMatch) {
+    matchSuccesses++;
     logger.debug(`Matched odds: "${eventHome} vs ${eventAway}" -> "${bestMatch.odds.homeTeam} vs ${bestMatch.odds.awayTeam}" (${(bestMatch.confidence * 100).toFixed(0)}%)`);
+  } else if (matchAttempts <= 3) {
+    // Log first few failed matches to understand why
+    logger.info(`No match for "${eventHome} vs ${eventAway}" (best similarity: ${(bestSimilarity * 100).toFixed(0)}%)`);
   }
 
   return bestMatch;
+}
+
+function resetMatchStats() {
+  matchAttempts = 0;
+  matchSuccesses = 0;
+}
+
+function logMatchStats() {
+  if (matchAttempts > 0) {
+    logger.info(`Match stats: ${matchSuccesses}/${matchAttempts} events matched (${((matchSuccesses/matchAttempts)*100).toFixed(0)}%)`);
+  }
 }
 
 async function updateEventOdds(db: any, event: any, odds: NormalizedOdds): Promise<void> {

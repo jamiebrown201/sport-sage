@@ -1,3 +1,16 @@
+/**
+ * Scraper Stack - Scheduled jobs for syncing sports data
+ *
+ * IMPORTANT: Deployed to eu-west-1 (Ireland)
+ * Use: aws ... --region eu-west-1
+ *
+ * Jobs:
+ * - sync-fixtures: Daily, uses proxy (~$1/day)
+ * - sync-live-scores: Every 1 min, uses free APIs
+ * - sync-odds: Every 15 min, uses free OddsPortal
+ * - transition-events: Every 1 min, DB only
+ * - settlement: SQS triggered
+ */
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
@@ -92,6 +105,7 @@ export class ScraperStack extends cdk.Stack {
     const syncFixturesHandler = new NodejsFunction(this, 'SyncFixtures', {
       ...defaultScraperProps,
       functionName: `sport-sage-${config.environment}-sync-fixtures`,
+      description: 'Syncs fixtures from FlashScore - runs daily with single concurrency',
       entry: path.join(__dirname, '../../../packages/scraper/src/jobs/sync-fixtures.ts'),
       handler: 'handler',
       memorySize: 2048, // More memory for Chromium and faster CPU
@@ -159,6 +173,7 @@ export class ScraperStack extends cdk.Stack {
     const syncOddsHandler = new NodejsFunction(this, 'SyncOdds', {
       ...defaultScraperProps,
       functionName: `sport-sage-${config.environment}-sync-odds`,
+      description: 'Syncs odds from OddsPortal - v8 with odds count debug',
       entry: path.join(__dirname, '../../../packages/scraper/src/jobs/sync-odds.ts'),
       handler: 'handler',
     });
