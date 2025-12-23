@@ -20,6 +20,10 @@ import { join } from 'path';
 const logger = createJobLogger('sync-odds');
 const DEBUG_DIR = '/tmp/scraper-debug';
 
+// The Odds API config (free tier: 500 requests/month)
+const ODDS_API_KEY = process.env.ODDS_API_KEY || '';
+const ODDS_API_BASE = 'https://api.the-odds-api.com/v4';
+
 // OddsPortal URLs - try multiple endpoints with fallbacks
 const SPORT_URLS: Record<string, string[]> = {
   football: [
@@ -84,42 +88,59 @@ export async function runSyncOdds(): Promise<void> {
     for (const sportSlug of ['football', 'tennis', 'basketball']) {
       logger.info(`Syncing odds for ${sportSlug}`);
 
-      const { page, release } = await browserPool.getPage();
+      let scrapedOdds: NormalizedOdds[] = [];
 
-      try {
-        // Wait for rate limit
-        await rateLimiter.waitForRateLimit('oddsportal.com');
-
-        // Simulate human behavior
-        await simulateHumanBehavior(page);
-
-        // Scrape odds
-        const scrapedOdds = await scrapeOddsPortal(page, sportSlug);
-        recordRequest('oddsportal', true, Date.now() - startTime);
-        rateLimiter.recordSuccess('oddsportal.com');
-
-        if (scrapedOdds.length === 0) {
-          logger.info(`No odds found for ${sportSlug}`);
-          continue;
-        }
-
-        logger.info(`Got ${scrapedOdds.length} events with odds for ${sportSlug}`);
-
-        // Match scraped odds to our events
-        for (const evt of upcomingEvents) {
-          const matched = matchEventToOdds(evt, scrapedOdds);
-
-          if (matched) {
-            await updateEventOdds(db, evt, matched);
-            totalUpdated++;
+      // Try the-odds-api.com first (if API key configured)
+      if (ODDS_API_KEY) {
+        try {
+          scrapedOdds = await fetchFromTheOddsApi(sportSlug);
+          if (scrapedOdds.length > 0) {
+            logger.info(`Got ${scrapedOdds.length} odds from the-odds-api for ${sportSlug}`);
           }
+        } catch (error) {
+          logger.warn(`the-odds-api failed for ${sportSlug}`, { error });
         }
-      } catch (error) {
-        recordRequest('oddsportal', false, Date.now() - startTime, { blocked: true });
-        rateLimiter.recordFailure('oddsportal.com');
-        logger.error(`Failed to sync odds for ${sportSlug}`, { error });
-      } finally {
-        await release();
+      }
+
+      // Fallback to OddsPortal scraping if no odds from API
+      if (scrapedOdds.length === 0) {
+        const { page, release } = await browserPool.getPage();
+
+        try {
+          // Wait for rate limit
+          await rateLimiter.waitForRateLimit('oddsportal.com');
+
+          // Simulate human behavior
+          await simulateHumanBehavior(page);
+
+          // Scrape odds
+          scrapedOdds = await scrapeOddsPortal(page, sportSlug);
+          recordRequest('oddsportal', true, Date.now() - startTime);
+          rateLimiter.recordSuccess('oddsportal.com');
+        } catch (error) {
+          recordRequest('oddsportal', false, Date.now() - startTime, { blocked: true });
+          rateLimiter.recordFailure('oddsportal.com');
+          logger.warn(`OddsPortal scraping failed for ${sportSlug}`, { error });
+        } finally {
+          await release();
+        }
+      }
+
+      if (scrapedOdds.length === 0) {
+        logger.info(`No odds found for ${sportSlug}`);
+        continue;
+      }
+
+      logger.info(`Got ${scrapedOdds.length} events with odds for ${sportSlug}`);
+
+      // Match scraped odds to our events
+      for (const evt of upcomingEvents) {
+        const matched = matchEventToOdds(evt, scrapedOdds);
+
+        if (matched) {
+          await updateEventOdds(db, evt, matched);
+          totalUpdated++;
+        }
       }
 
       // Delay between sports
@@ -134,6 +155,105 @@ export async function runSyncOdds(): Promise<void> {
     logger.error('Odds sync failed', { error });
     throw error;
   }
+}
+
+// Fetch odds from the-odds-api.com (free tier: 500 requests/month)
+async function fetchFromTheOddsApi(sportSlug: string): Promise<NormalizedOdds[]> {
+  const results: NormalizedOdds[] = [];
+
+  // Map our sport slugs to the-odds-api sport keys
+  const sportKeys: Record<string, string[]> = {
+    football: ['soccer_epl', 'soccer_spain_la_liga', 'soccer_italy_serie_a', 'soccer_germany_bundesliga'],
+    basketball: ['basketball_nba', 'basketball_euroleague'],
+    tennis: [], // Tennis not well supported on the-odds-api
+  };
+
+  const keys = sportKeys[sportSlug] || [];
+  if (keys.length === 0) {
+    logger.info(`the-odds-api: No sport keys for ${sportSlug}`);
+    return results;
+  }
+
+  for (const sportKey of keys) {
+    try {
+      const url = `${ODDS_API_BASE}/sports/${sportKey}/odds/?apiKey=${ODDS_API_KEY}&regions=uk,eu&markets=h2h&oddsFormat=decimal`;
+
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const remaining = response.headers.get('x-requests-remaining');
+        logger.warn(`the-odds-api: Request failed for ${sportKey}`, {
+          status: response.status,
+          remaining,
+        });
+        continue;
+      }
+
+      // Log remaining quota
+      const remaining = response.headers.get('x-requests-remaining');
+      const used = response.headers.get('x-requests-used');
+      logger.info(`the-odds-api: Quota - used: ${used}, remaining: ${remaining}`);
+
+      const data = await response.json();
+
+      for (const event of data) {
+        try {
+          const homeTeam = event.home_team || '';
+          const awayTeam = event.away_team || '';
+
+          if (!homeTeam || !awayTeam) continue;
+
+          // Get best odds from all bookmakers
+          let bestHome = 0;
+          let bestDraw = 0;
+          let bestAway = 0;
+          let bookmakerCount = 0;
+
+          for (const bookmaker of event.bookmakers || []) {
+            for (const market of bookmaker.markets || []) {
+              if (market.key === 'h2h') {
+                for (const outcome of market.outcomes || []) {
+                  const price = outcome.price || 0;
+                  if (outcome.name === homeTeam) {
+                    bestHome = Math.max(bestHome, price);
+                  } else if (outcome.name === awayTeam) {
+                    bestAway = Math.max(bestAway, price);
+                  } else if (outcome.name === 'Draw') {
+                    bestDraw = Math.max(bestDraw, price);
+                  }
+                }
+                bookmakerCount++;
+              }
+            }
+          }
+
+          if (bestHome > 1 && bestAway > 1) {
+            results.push({
+              homeTeam,
+              awayTeam,
+              homeWin: bestHome,
+              draw: bestDraw > 1 ? bestDraw : undefined,
+              awayWin: bestAway,
+              source: 'the-odds-api',
+              bookmakerCount,
+            });
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      logger.info(`the-odds-api: Got ${results.length} odds from ${sportKey}`);
+    } catch (error) {
+      logger.warn(`the-odds-api: Failed to fetch ${sportKey}`, { error });
+    }
+  }
+
+  return results;
 }
 
 async function scrapeOddsPortal(page: Page, sportSlug: string): Promise<NormalizedOdds[]> {
