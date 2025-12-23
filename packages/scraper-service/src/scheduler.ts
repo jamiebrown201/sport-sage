@@ -50,6 +50,9 @@ export async function initializeJobs(): Promise<void> {
   transitionEvents = transitionModule.runTransitionEvents;
 }
 
+// Set to true to enable cron-based scheduling, false for manual-only testing
+const CRON_ENABLED = process.env.ENABLE_CRON === 'true';
+
 const jobs: JobDefinition[] = [
   {
     name: 'sync-fixtures',
@@ -57,7 +60,7 @@ const jobs: JobDefinition[] = [
     handler: async () => {
       if (syncFixtures) await syncFixtures();
     },
-    enabled: true,
+    enabled: CRON_ENABLED,
   },
   {
     name: 'sync-odds',
@@ -65,7 +68,7 @@ const jobs: JobDefinition[] = [
     handler: async () => {
       if (syncOdds) await syncOdds();
     },
-    enabled: true,
+    enabled: CRON_ENABLED,
   },
   {
     name: 'sync-live-scores',
@@ -73,7 +76,7 @@ const jobs: JobDefinition[] = [
     handler: async () => {
       if (syncLiveScores) await syncLiveScores();
     },
-    enabled: true,
+    enabled: CRON_ENABLED,
   },
   {
     name: 'transition-events',
@@ -81,7 +84,7 @@ const jobs: JobDefinition[] = [
     handler: async () => {
       if (transitionEvents) await transitionEvents();
     },
-    enabled: true,
+    enabled: CRON_ENABLED,
   },
   {
     name: 'browser-rotation',
@@ -91,7 +94,7 @@ const jobs: JobDefinition[] = [
       await pool.recycleAllContexts('scheduled_rotation');
       logger.info('Scheduled browser context rotation completed');
     },
-    enabled: true,
+    enabled: CRON_ENABLED,
   },
 ];
 
