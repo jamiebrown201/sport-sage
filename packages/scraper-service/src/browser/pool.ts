@@ -435,11 +435,18 @@ async function configureRouteBlocking(page: Page): Promise<void> {
       return route.abort();
     }
 
-    // Block third-party scripts (only allow flashscore.com and sofascore.com scripts)
+    // Block third-party scripts (only allow specific domains)
+    // NOTE: Don't block scripts for OddsPortal - it needs CDN scripts for Vue.js to work
     if (resourceType === 'script' &&
         !url.includes('flashscore.com') &&
         !url.includes('sofascore.com') &&
-        !url.includes('oddsportal.com')) {
+        !url.includes('oddsportal.com') &&
+        !url.includes('cloudflare') &&
+        !url.includes('jsdelivr') &&
+        !url.includes('unpkg') &&
+        !url.includes('cdnjs') &&
+        !url.includes('vue') &&
+        !url.includes('nuxt')) {
       return route.abort();
     }
 

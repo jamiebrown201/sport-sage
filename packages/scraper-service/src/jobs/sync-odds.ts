@@ -90,8 +90,35 @@ export async function runSyncOdds(): Promise<void> {
 
       let scrapedOdds: NormalizedOdds[] = [];
 
-      // Try the-odds-api.com first (if API key configured)
-      if (ODDS_API_KEY) {
+      // Try OddsPortal scraping first
+      const { page, release } = await browserPool.getPage();
+
+      try {
+        // Wait for rate limit
+        await rateLimiter.waitForRateLimit('oddsportal.com');
+
+        // Simulate human behavior
+        await simulateHumanBehavior(page);
+
+        // Scrape odds
+        scrapedOdds = await scrapeOddsPortal(page, sportSlug);
+
+        if (scrapedOdds.length > 0) {
+          recordRequest('oddsportal', true, Date.now() - startTime);
+          rateLimiter.recordSuccess('oddsportal.com');
+          logger.info(`Got ${scrapedOdds.length} odds from OddsPortal for ${sportSlug}`);
+        }
+      } catch (error) {
+        recordRequest('oddsportal', false, Date.now() - startTime, { blocked: true });
+        rateLimiter.recordFailure('oddsportal.com');
+        logger.warn(`OddsPortal scraping failed for ${sportSlug}`, { error });
+      } finally {
+        await release();
+      }
+
+      // Fallback to the-odds-api.com if OddsPortal didn't return results
+      if (scrapedOdds.length === 0 && ODDS_API_KEY) {
+        logger.info(`OddsPortal returned no results, trying the-odds-api for ${sportSlug}`);
         try {
           scrapedOdds = await fetchFromTheOddsApi(sportSlug);
           if (scrapedOdds.length > 0) {
@@ -99,30 +126,6 @@ export async function runSyncOdds(): Promise<void> {
           }
         } catch (error) {
           logger.warn(`the-odds-api failed for ${sportSlug}`, { error });
-        }
-      }
-
-      // Fallback to OddsPortal scraping if no odds from API
-      if (scrapedOdds.length === 0) {
-        const { page, release } = await browserPool.getPage();
-
-        try {
-          // Wait for rate limit
-          await rateLimiter.waitForRateLimit('oddsportal.com');
-
-          // Simulate human behavior
-          await simulateHumanBehavior(page);
-
-          // Scrape odds
-          scrapedOdds = await scrapeOddsPortal(page, sportSlug);
-          recordRequest('oddsportal', true, Date.now() - startTime);
-          rateLimiter.recordSuccess('oddsportal.com');
-        } catch (error) {
-          recordRequest('oddsportal', false, Date.now() - startTime, { blocked: true });
-          rateLimiter.recordFailure('oddsportal.com');
-          logger.warn(`OddsPortal scraping failed for ${sportSlug}`, { error });
-        } finally {
-          await release();
         }
       }
 
