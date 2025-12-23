@@ -2,14 +2,14 @@
  * Health check and trigger API endpoints
  */
 
-import express from 'express';
+import express, { Router } from 'express';
 import { healthCheck as dbHealthCheck } from '../database/client.js';
 import { getBrowserPoolStats } from '../browser/pool.js';
 import { getMetrics } from '../monitoring/metrics.js';
 import { getJobStatus, triggerJob } from '../scheduler.js';
 import { logger } from '../logger.js';
 
-export const router = express.Router();
+export const router: Router = express.Router();
 
 // Health check endpoint
 router.get('/health', async (_req, res) => {
