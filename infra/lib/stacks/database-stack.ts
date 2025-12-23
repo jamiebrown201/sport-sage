@@ -57,16 +57,35 @@ export class DatabaseStack extends cdk.Stack {
       'Allow PostgreSQL from VPC'
     );
 
+    // Allow ingress from Hetzner VPS (scraper service)
+    // VPS IP: 77.42.42.185
+    if (config.vpsIp) {
+      this.securityGroup.addIngressRule(
+        ec2.Peer.ipv4(`${config.vpsIp}/32`),
+        ec2.Port.tcp(5432),
+        'Allow PostgreSQL from VPS scraper'
+      );
+    }
+
     // Aurora Serverless v2 PostgreSQL
+    // Use public subnets if VPS access is needed for external scraper service
+    const usePublicSubnets = !!config.vpsIp;
+
     this.cluster = new rds.DatabaseCluster(this, 'Database', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
         version: rds.AuroraPostgresEngineVersion.VER_15_6,
       }),
       serverlessV2MinCapacity: config.auroraMinCapacity,
       serverlessV2MaxCapacity: config.auroraMaxCapacity,
-      writer: rds.ClusterInstance.serverlessV2('writer'),
+      writer: rds.ClusterInstance.serverlessV2('writer', {
+        publiclyAccessible: usePublicSubnets,
+      }),
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: {
+        subnetType: usePublicSubnets
+          ? ec2.SubnetType.PUBLIC
+          : ec2.SubnetType.PRIVATE_ISOLATED
+      },
       securityGroups: [this.securityGroup],
       defaultDatabaseName: 'sportsage',
       // Note: storageEncrypted intentionally omitted to match existing cluster

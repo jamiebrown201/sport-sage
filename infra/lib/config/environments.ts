@@ -13,6 +13,9 @@ export interface EnvironmentConfig {
 
   // Feature flags
   enableAlarms: boolean;
+
+  // External access (VPS scraper)
+  vpsIp?: string;
 }
 
 export const environments: Record<string, EnvironmentConfig> = {
@@ -25,6 +28,7 @@ export const environments: Record<string, EnvironmentConfig> = {
     lambdaMemory: 512,
     lambdaTimeout: 30,
     enableAlarms: false,
+    vpsIp: '77.42.42.185', // Hetzner VPS for scraper service
   },
   staging: {
     environment: 'staging',
