@@ -507,28 +507,147 @@ async function getTimeText(element: any): Promise<string | null> {
 }
 
 function parseTime(timeText: string | null): Date | null {
-  if (!timeText || !timeText.includes(':')) return null;
+  if (!timeText) return null;
+
+  const trimmed = timeText.trim();
+
+  // Skip live match indicators - these are NOT scheduled times
+  const liveIndicators = [
+    /^\d{1,3}['+]?\d*$/, // "45", "45+", "45+2", "67'" (minute indicators)
+    /^HT$/i, // Half time
+    /^Half\s*Time$/i,
+    /^FT$/i, // Full time
+    /^Finished$/i,
+    /^AET$/i, // After extra time
+    /^Pen\.?$/i, // Penalties
+    /^Break$/i, // Break
+    /^\d+(st|nd|rd|th)$/i, // "1st", "2nd" quarter/set
+    /^Q[1-4]$/i, // Quarter indicators
+    /^Set\s?\d$/i, // Set indicators
+    /^Live$/i, // Live indicator
+    /^Playing$/i, // Playing indicator
+    /^Postp\.?$/i, // Postponed
+    /^Canc\.?$/i, // Cancelled
+    /^Awarded$/i, // Awarded
+    /^W\.?O\.?$/i, // Walkover
+    /^Not Started$/i,
+    /^Delayed$/i,
+    /^Interrupted$/i,
+    /^Abandoned$/i,
+  ];
+
+  if (liveIndicators.some((pattern) => pattern.test(trimmed))) {
+    return null;
+  }
+
+  // Must contain a colon for time format
+  if (!trimmed.includes(':')) {
+    return null;
+  }
 
   try {
     const now = new Date();
-    const [hours, minutes] = timeText.split(':').map(Number);
+    const nowUTC = Date.now();
 
-    if (isNaN(hours) || isNaN(minutes)) return null;
+    // Check for date format: "DD.MM. HH:MM" or "DD.MM.YYYY HH:MM"
+    if (trimmed.includes('.')) {
+      // Split into date and time parts
+      const parts = trimmed.split(' ').filter((p) => p.length > 0);
+      if (parts.length < 2) return null;
 
-    const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hours, minutes));
+      const datePart = parts[0];
+      const timePart = parts[parts.length - 1];
 
-    // Adjust for CET (assume +1 hour)
-    date.setTime(date.getTime() - 60 * 60 * 1000);
+      // Parse date (DD.MM. or DD.MM.YYYY)
+      const dateParts = datePart.split('.').filter((p) => p.length > 0);
+      if (dateParts.length < 2) return null;
 
-    // If time has passed, assume tomorrow
-    if (date.getTime() < Date.now()) {
-      date.setTime(date.getTime() + 24 * 60 * 60 * 1000);
+      const day = parseInt(dateParts[0]);
+      const month = parseInt(dateParts[1]);
+
+      if (isNaN(day) || isNaN(month)) return null;
+
+      // Parse time (HH:MM)
+      const timeParts = timePart.split(':');
+      if (timeParts.length < 2) return null;
+
+      const hours = parseInt(timeParts[0]);
+      const minutes = parseInt(timeParts[1]);
+
+      if (isNaN(hours) || isNaN(minutes)) return null;
+
+      // Create date in UTC, then adjust for CET offset
+      const year = now.getUTCFullYear();
+      const utcDate = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+
+      // Adjust for CET: subtract 1 hour (winter) or 2 hours (summer) to get UTC
+      const cetOffset = getCETOffset(utcDate);
+      utcDate.setTime(utcDate.getTime() - cetOffset);
+
+      // Handle year rollover (if date is in the past, assume next year)
+      if (utcDate.getTime() < nowUTC - 24 * 60 * 60 * 1000) {
+        utcDate.setUTCFullYear(utcDate.getUTCFullYear() + 1);
+      }
+
+      return utcDate;
+    } else {
+      // Time only format: "HH:MM" - assume today or tomorrow
+      const timeParts = trimmed.split(':');
+      if (timeParts.length < 2) return null;
+
+      const hours = parseInt(timeParts[0]);
+      const minutes = parseInt(timeParts[1]);
+
+      if (isNaN(hours) || isNaN(minutes)) return null;
+      if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+      // Create date for today in UTC, adjust for CET
+      const utcDate = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        hours,
+        minutes
+      ));
+
+      // Adjust for CET offset
+      const cetOffset = getCETOffset(utcDate);
+      utcDate.setTime(utcDate.getTime() - cetOffset);
+
+      // If time has passed, assume tomorrow
+      if (utcDate.getTime() < nowUTC) {
+        utcDate.setTime(utcDate.getTime() + 24 * 60 * 60 * 1000);
+      }
+
+      return utcDate;
     }
-
-    return date;
   } catch {
     return null;
   }
+}
+
+/**
+ * Get CET/CEST offset in milliseconds
+ * CET = UTC+1 (winter), CEST = UTC+2 (summer)
+ */
+function getCETOffset(date: Date): number {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+
+  // Find last Sunday of March (DST starts at 2:00 CET -> 3:00 CEST)
+  const marchLast = new Date(Date.UTC(year, 2, 31));
+  const dstStart = new Date(Date.UTC(year, 2, 31 - marchLast.getUTCDay(), 1, 0));
+
+  // Find last Sunday of October (DST ends at 3:00 CEST -> 2:00 CET)
+  const octLast = new Date(Date.UTC(year, 9, 31));
+  const dstEnd = new Date(Date.UTC(year, 9, 31 - octLast.getUTCDay(), 1, 0));
+
+  // Check if date is in DST period (CEST = UTC+2)
+  if (date >= dstStart && date < dstEnd) {
+    return 2 * 60 * 60 * 1000; // CEST: +2 hours
+  }
+
+  return 1 * 60 * 60 * 1000; // CET: +1 hour
 }
 
 function isWithinDays(date: Date, days: number): boolean {
