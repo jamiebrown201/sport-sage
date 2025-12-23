@@ -302,18 +302,47 @@ async function scrapeOddsPortal(page: Page, sportSlug: string): Promise<Normaliz
 async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promise<NormalizedOdds[]> {
   const odds: NormalizedOdds[] = [];
   const apiResponses: any[] = [];
+  const failedRequests: Array<{ url: string; status: number }> = [];
+  const blockedRequests: string[] = [];
 
   logger.info(`OddsPortal: Scraping ${url}`);
+
+  // Log all requests to understand what's happening
+  page.on('request', (request) => {
+    const reqUrl = request.url();
+    if (reqUrl.includes('oddsportal') && !reqUrl.includes('.css') && !reqUrl.includes('.png') && !reqUrl.includes('.svg')) {
+      logger.debug(`OddsPortal Request: ${request.method()} ${reqUrl.substring(0, 100)}`);
+    }
+  });
+
+  // Track failed requests
+  page.on('requestfailed', (request) => {
+    const reqUrl = request.url();
+    if (reqUrl.includes('oddsportal')) {
+      blockedRequests.push(reqUrl.substring(0, 100));
+      logger.warn(`OddsPortal Request FAILED: ${reqUrl.substring(0, 100)} - ${request.failure()?.errorText}`);
+    }
+  });
 
   // Intercept API responses that might contain odds data
   page.on('response', async (response) => {
     const responseUrl = response.url();
+    const status = response.status();
+
+    // Log non-200 responses from OddsPortal
+    if (responseUrl.includes('oddsportal') && status !== 200 && status !== 204 && status !== 304) {
+      failedRequests.push({ url: responseUrl.substring(0, 100), status });
+      logger.warn(`OddsPortal Response ${status}: ${responseUrl.substring(0, 100)}`);
+    }
+
     if (
       responseUrl.includes('/ajax') ||
       responseUrl.includes('/api') ||
       responseUrl.includes('feed') ||
       responseUrl.includes('games') ||
-      responseUrl.includes('matches')
+      responseUrl.includes('matches') ||
+      responseUrl.includes('next-games') ||
+      responseUrl.includes('event')
     ) {
       try {
         const contentType = response.headers()['content-type'] || '';
@@ -560,6 +589,14 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
     // If DOM parsing found nothing but JSON-LD has events, log it
     if (odds.length === 0 && jsonLdEvents.length > 0) {
       logger.info(`OddsPortal: DOM found no odds, JSON-LD has ${jsonLdEvents.length} fixture names only`);
+    }
+
+    // Log network issues summary
+    if (failedRequests.length > 0) {
+      logger.warn(`OddsPortal: ${failedRequests.length} HTTP errors`, { failedRequests });
+    }
+    if (blockedRequests.length > 0) {
+      logger.warn(`OddsPortal: ${blockedRequests.length} blocked requests`, { blockedRequests });
     }
 
     // Try to parse any captured API responses
