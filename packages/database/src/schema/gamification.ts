@@ -10,8 +10,8 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { users } from './users';
-import { sportSlugEnum } from './sports';
+import { users } from './users.js';
+import { sportSlugEnum } from './sports.js';
 
 // Achievement enums
 export const achievementCategoryEnum = pgEnum('achievement_category', [

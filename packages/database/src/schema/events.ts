@@ -10,7 +10,7 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { sports, competitions, teams, players } from './sports';
+import { sports, competitions, teams, players } from './sports.js';
 
 // Enums
 export const eventStatusEnum = pgEnum('event_status', [

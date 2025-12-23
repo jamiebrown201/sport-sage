@@ -9,8 +9,8 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { users } from './users';
-import { events, markets, outcomes } from './events';
+import { users } from './users.js';
+import { events, markets, outcomes } from './events.js';
 
 // Enums
 export const predictionStatusEnum = pgEnum('prediction_status', [

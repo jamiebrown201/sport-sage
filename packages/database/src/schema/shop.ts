@@ -10,7 +10,7 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
-import { users } from './users';
+import { users } from './users.js';
 
 // Enums
 export const cosmeticCategoryEnum = pgEnum('cosmetic_category', [
