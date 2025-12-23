@@ -50,6 +50,8 @@ export async function runSyncFixtures(): Promise<void> {
   try {
     for (const sportSlug of SPORTS_TO_SYNC) {
       logger.info(`Syncing fixtures for ${sportSlug}`);
+      // Reset debug counter for each sport
+      debugCount = 0;
 
       const { page, release } = await browserPool.getPage();
 
@@ -361,26 +363,64 @@ async function waitForMatchElements(page: Page): Promise<string | null> {
   return null;
 }
 
+// Track debug output to avoid spamming logs
+let debugCount = 0;
+const MAX_DEBUG_LOGS = 5;
+
 async function parseMatchElement(
   element: any,
   sportSlug: string,
   competition: string
 ): Promise<ScrapedFixture | null> {
+  const shouldDebug = debugCount < MAX_DEBUG_LOGS;
+
   try {
     const id = await element.getAttribute('id');
-    if (!id) return null;
+    if (!id) {
+      if (shouldDebug) {
+        debugCount++;
+        logger.debug('parseMatchElement: no ID attribute');
+      }
+      return null;
+    }
 
     const externalId = id.replace(/g_\d+_/, '');
 
     // Get team names
     const homeTeam = await getParticipantName(element, 'home');
     const awayTeam = await getParticipantName(element, 'away');
-    if (!homeTeam || !awayTeam) return null;
+    if (!homeTeam || !awayTeam) {
+      if (shouldDebug) {
+        debugCount++;
+        // Get element's class names for debugging
+        const classes = await element.getAttribute('class');
+        const innerHtml = await element.evaluate((el: Element) => el.innerHTML?.substring(0, 500));
+        logger.debug('parseMatchElement: missing team names', {
+          id,
+          homeTeam,
+          awayTeam,
+          classes,
+          innerHtml,
+        });
+      }
+      return null;
+    }
 
     // Get time
     const timeText = await getTimeText(element);
     const startTime = parseTime(timeText);
-    if (!startTime) return null;
+    if (!startTime) {
+      if (shouldDebug) {
+        debugCount++;
+        logger.debug('parseMatchElement: failed to parse time', {
+          id,
+          homeTeam,
+          awayTeam,
+          timeText,
+        });
+      }
+      return null;
+    }
 
     return {
       externalId,
@@ -391,7 +431,11 @@ async function parseMatchElement(
       startTime,
       source: 'flashscore',
     };
-  } catch {
+  } catch (error) {
+    if (shouldDebug) {
+      debugCount++;
+      logger.debug('parseMatchElement: exception', { error });
+    }
     return null;
   }
 }
