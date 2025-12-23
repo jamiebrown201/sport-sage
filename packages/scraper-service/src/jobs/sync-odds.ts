@@ -82,11 +82,6 @@ export async function runSyncOdds(): Promise<void> {
 
   logger.info(`Found ${upcomingEvents.length} events to sync odds for`);
 
-  // Debug: Log all database events we're trying to match
-  for (const evt of upcomingEvents) {
-    logger.info(`DB Event: ${evt.homeTeamName} vs ${evt.awayTeamName}`);
-  }
-
   let totalUpdated = 0;
 
   try {
@@ -141,20 +136,11 @@ export async function runSyncOdds(): Promise<void> {
 
       logger.info(`Got ${scrapedOdds.length} events with odds for ${sportSlug}`);
 
-      // Debug: Log first few scraped odds
-      if (scrapedOdds.length > 0) {
-        logger.info(`Sample scraped odds: ${scrapedOdds.slice(0, 3).map(o => `${o.homeTeam} vs ${o.awayTeam}`).join(', ')}`);
-      }
-
       // Match scraped odds to our events
       for (const evt of upcomingEvents) {
-        // Debug: Log each event we're trying to match
-        logger.debug(`Trying to match: ${evt.homeTeamName} vs ${evt.awayTeamName}`);
-
         const matched = matchEventToOdds(evt, scrapedOdds);
 
         if (matched) {
-          logger.info(`Matched: ${evt.homeTeamName} vs ${evt.awayTeamName} -> ${matched.homeTeam} vs ${matched.awayTeam}`);
           await updateEventOdds(db, evt, matched);
           totalUpdated++;
         }
@@ -315,61 +301,8 @@ async function scrapeOddsPortal(page: Page, sportSlug: string): Promise<Normaliz
 
 async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promise<NormalizedOdds[]> {
   const odds: NormalizedOdds[] = [];
-  const apiResponses: any[] = [];
-  const failedRequests: Array<{ url: string; status: number }> = [];
-  const blockedRequests: string[] = [];
 
   logger.info(`OddsPortal: Scraping ${url}`);
-
-  // Log all requests to understand what's happening
-  page.on('request', (request) => {
-    const reqUrl = request.url();
-    if (reqUrl.includes('oddsportal') && !reqUrl.includes('.css') && !reqUrl.includes('.png') && !reqUrl.includes('.svg')) {
-      logger.debug(`OddsPortal Request: ${request.method()} ${reqUrl.substring(0, 100)}`);
-    }
-  });
-
-  // Track failed requests
-  page.on('requestfailed', (request) => {
-    const reqUrl = request.url();
-    if (reqUrl.includes('oddsportal')) {
-      blockedRequests.push(reqUrl.substring(0, 100));
-      logger.warn(`OddsPortal Request FAILED: ${reqUrl.substring(0, 100)} - ${request.failure()?.errorText}`);
-    }
-  });
-
-  // Intercept API responses that might contain odds data
-  page.on('response', async (response) => {
-    const responseUrl = response.url();
-    const status = response.status();
-
-    // Log non-200 responses from OddsPortal
-    if (responseUrl.includes('oddsportal') && status !== 200 && status !== 204 && status !== 304) {
-      failedRequests.push({ url: responseUrl.substring(0, 100), status });
-      logger.warn(`OddsPortal Response ${status}: ${responseUrl.substring(0, 100)}`);
-    }
-
-    if (
-      responseUrl.includes('/ajax') ||
-      responseUrl.includes('/api') ||
-      responseUrl.includes('feed') ||
-      responseUrl.includes('games') ||
-      responseUrl.includes('matches') ||
-      responseUrl.includes('next-games') ||
-      responseUrl.includes('event')
-    ) {
-      try {
-        const contentType = response.headers()['content-type'] || '';
-        if (contentType.includes('json')) {
-          const json = await response.json();
-          apiResponses.push({ url: responseUrl, data: json });
-          logger.info(`OddsPortal: Captured API response from ${responseUrl.substring(0, 80)}`);
-        }
-      } catch {
-        // Not JSON or failed to parse
-      }
-    }
-  });
 
   try {
     // Use networkidle for dynamic content
@@ -574,76 +507,12 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
       logger.info(`OddsPortal: DOM found no odds, JSON-LD has ${jsonLdEvents.length} fixture names only`);
     }
 
-    // Log network issues summary
-    if (failedRequests.length > 0) {
-      logger.warn(`OddsPortal: ${failedRequests.length} HTTP errors`, { failedRequests });
-    }
-    if (blockedRequests.length > 0) {
-      logger.warn(`OddsPortal: ${blockedRequests.length} blocked requests`, { blockedRequests });
-    }
-
-    // Try to parse any captured API responses
-    if (odds.length === 0 && apiResponses.length > 0) {
-      logger.info(`OddsPortal: Trying to parse ${apiResponses.length} API response(s)`);
-      for (const { url: apiUrl, data } of apiResponses) {
-        try {
-          const parsed = parseApiResponse(data, sportSlug);
-          if (parsed.length > 0) {
-            logger.info(`OddsPortal: Parsed ${parsed.length} events from API: ${apiUrl.substring(0, 50)}`);
-            odds.push(...parsed);
-          }
-        } catch (e) {
-          logger.debug(`Failed to parse API response: ${apiUrl}`, { error: e });
-        }
-      }
-    }
-
     logger.info(`OddsPortal: Retrieved ${odds.length} events with valid odds from ${url}`);
   } catch (error) {
     logger.warn(`Failed to scrape OddsPortal: ${url}`, { error });
   }
 
   return odds;
-}
-
-// Parse OddsPortal API responses (structure varies)
-function parseApiResponse(data: any, sportSlug: string): NormalizedOdds[] {
-  const results: NormalizedOdds[] = [];
-
-  // Try different API response structures
-  const items = data?.d?.rows || data?.d?.oddsData || data?.rows || data?.matches || data?.events || [];
-
-  for (const item of items) {
-    try {
-      // Common fields
-      const homeTeam = item.home?.name || item.homeTeam || item.home_name || item.participants?.[0]?.name || '';
-      const awayTeam = item.away?.name || item.awayTeam || item.away_name || item.participants?.[1]?.name || '';
-
-      if (!homeTeam || !awayTeam) continue;
-
-      // Try to extract odds
-      const odds = item.odds || item.eventOdds || {};
-      const homeWin = parseFloat(odds['1'] || odds.home || odds['1x2']?.[0] || '0');
-      const draw = parseFloat(odds['X'] || odds.draw || odds['1x2']?.[1] || '0');
-      const awayWin = parseFloat(odds['2'] || odds.away || odds['1x2']?.[2] || '0');
-
-      if (homeWin > 1 && awayWin > 1) {
-        results.push({
-          homeTeam,
-          awayTeam,
-          homeWin,
-          draw: draw > 1 ? draw : undefined,
-          awayWin,
-          source: 'oddsportal-api',
-          bookmakerCount: 1,
-        });
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return results;
 }
 
 function matchEventToOdds(event: any, scrapedOdds: NormalizedOdds[]): NormalizedOdds | null {
