@@ -14,8 +14,11 @@ import { recordRequest } from '../monitoring/metrics.js';
 import { getRateLimitDetector } from '../rate-limit/detector.js';
 import { simulateHumanBehavior, waitWithJitter } from '../browser/behavior.js';
 import type { Page } from 'playwright';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
 
 const logger = createJobLogger('sync-odds');
+const DEBUG_DIR = '/tmp/scraper-debug';
 
 // OddsPortal URLs - try multiple endpoints with fallbacks
 const SPORT_URLS: Record<string, string[]> = {
@@ -201,18 +204,41 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
 
     await waitWithJitter(2000);
 
-    // Debug: Log page info
+    // Debug: Log page info and save HTML for analysis
     const debugInfo = await page.evaluate(() => {
       const title = document.title;
       const currentUrl = window.location.href;
       const eventRows = document.querySelectorAll('[class*="eventRow"]').length;
       const allLinks = document.querySelectorAll('a').length;
       const oddsPattern = (document.body.textContent || '').match(/\d+\.\d{1,2}/g) || [];
-      return { title, currentUrl, eventRows, allLinks, oddsCount: oddsPattern.length };
+      const html = document.body.innerHTML;
+
+      // Look for any divs that might contain match data
+      const flexDivs = document.querySelectorAll('div.flex').length;
+      const borderDivs = document.querySelectorAll('div[class*="border"]').length;
+      const groupDivs = document.querySelectorAll('div[class*="group"]').length;
+
+      // Find any text containing team-like patterns
+      const teamMatches = (document.body.textContent || '').match(/[A-Z][a-z]+ [A-Z][a-z]+ - [A-Z][a-z]+ [A-Z][a-z]+/g) || [];
+
+      return { title, currentUrl, eventRows, allLinks, oddsCount: oddsPattern.length, htmlLength: html.length, flexDivs, borderDivs, groupDivs, teamMatches: teamMatches.slice(0, 5), html };
     });
     logger.info(
-      `OddsPortal Debug: ${debugInfo.title}, eventRows=${debugInfo.eventRows}, links=${debugInfo.allLinks}, oddsPatterns=${debugInfo.oddsCount}`
+      `OddsPortal Debug: ${debugInfo.title}, eventRows=${debugInfo.eventRows}, links=${debugInfo.allLinks}, oddsPatterns=${debugInfo.oddsCount}, flexDivs=${debugInfo.flexDivs}, borderDivs=${debugInfo.borderDivs}, groupDivs=${debugInfo.groupDivs}`
     );
+    if (debugInfo.teamMatches.length > 0) {
+      logger.info(`OddsPortal Debug: Team matches found: ${debugInfo.teamMatches.join(', ')}`);
+    }
+
+    // Save HTML for debugging (only once per sport)
+    try {
+      await mkdir(DEBUG_DIR, { recursive: true });
+      const filename = join(DEBUG_DIR, `oddsportal-${sportSlug}-${Date.now()}.html`);
+      await writeFile(filename, debugInfo.html);
+      logger.info(`OddsPortal Debug: Saved HTML to ${filename}`);
+    } catch (e) {
+      // Ignore write errors
+    }
 
     // Try JSON-LD structured data first (most reliable)
     const jsonLdEvents = await page.evaluate(() => {
