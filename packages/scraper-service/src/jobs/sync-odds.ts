@@ -178,19 +178,62 @@ async function scrapeOddsPortal(page: Page, sportSlug: string): Promise<Normaliz
 
 async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promise<NormalizedOdds[]> {
   const odds: NormalizedOdds[] = [];
+  const apiResponses: any[] = [];
 
   logger.info(`OddsPortal: Scraping ${url}`);
+
+  // Intercept API responses that might contain odds data
+  page.on('response', async (response) => {
+    const responseUrl = response.url();
+    if (
+      responseUrl.includes('/ajax') ||
+      responseUrl.includes('/api') ||
+      responseUrl.includes('feed') ||
+      responseUrl.includes('games') ||
+      responseUrl.includes('matches')
+    ) {
+      try {
+        const contentType = response.headers()['content-type'] || '';
+        if (contentType.includes('json')) {
+          const json = await response.json();
+          apiResponses.push({ url: responseUrl, data: json });
+          logger.info(`OddsPortal: Captured API response from ${responseUrl.substring(0, 80)}`);
+        }
+      } catch {
+        // Not JSON or failed to parse
+      }
+    }
+  });
 
   try {
     // Use networkidle for dynamic content
     await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
     await waitWithJitter(2000);
 
+    // Handle cookie consent - OddsPortal uses OneTrust
+    try {
+      const consentButton = await page.$('#onetrust-accept-btn-handler, [id*="accept"], button[class*="accept"], .onetrust-close-btn-handler');
+      if (consentButton) {
+        await consentButton.click();
+        logger.info('OddsPortal: Clicked cookie consent button');
+        await waitWithJitter(2000);
+      }
+    } catch {
+      // No consent button, continue
+    }
+
     // Scroll to trigger lazy loading
     await page.evaluate(() => {
       window.scrollBy(0, 500);
     });
     await waitWithJitter(1500);
+
+    // Additional scroll and wait for Vue hydration
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      window.scrollBy(0, 300);
+    });
+    await waitWithJitter(3000);
 
     // Wait for content to load with fallback
     await page
@@ -396,12 +439,68 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
       logger.info(`OddsPortal: DOM found no odds, JSON-LD has ${jsonLdEvents.length} fixture names only`);
     }
 
+    // Try to parse any captured API responses
+    if (odds.length === 0 && apiResponses.length > 0) {
+      logger.info(`OddsPortal: Trying to parse ${apiResponses.length} API response(s)`);
+      for (const { url: apiUrl, data } of apiResponses) {
+        try {
+          const parsed = parseApiResponse(data, sportSlug);
+          if (parsed.length > 0) {
+            logger.info(`OddsPortal: Parsed ${parsed.length} events from API: ${apiUrl.substring(0, 50)}`);
+            odds.push(...parsed);
+          }
+        } catch (e) {
+          logger.debug(`Failed to parse API response: ${apiUrl}`, { error: e });
+        }
+      }
+    }
+
     logger.info(`OddsPortal: Retrieved ${odds.length} events with valid odds from ${url}`);
   } catch (error) {
     logger.warn(`Failed to scrape OddsPortal: ${url}`, { error });
   }
 
   return odds;
+}
+
+// Parse OddsPortal API responses (structure varies)
+function parseApiResponse(data: any, sportSlug: string): NormalizedOdds[] {
+  const results: NormalizedOdds[] = [];
+
+  // Try different API response structures
+  const items = data?.d?.rows || data?.d?.oddsData || data?.rows || data?.matches || data?.events || [];
+
+  for (const item of items) {
+    try {
+      // Common fields
+      const homeTeam = item.home?.name || item.homeTeam || item.home_name || item.participants?.[0]?.name || '';
+      const awayTeam = item.away?.name || item.awayTeam || item.away_name || item.participants?.[1]?.name || '';
+
+      if (!homeTeam || !awayTeam) continue;
+
+      // Try to extract odds
+      const odds = item.odds || item.eventOdds || {};
+      const homeWin = parseFloat(odds['1'] || odds.home || odds['1x2']?.[0] || '0');
+      const draw = parseFloat(odds['X'] || odds.draw || odds['1x2']?.[1] || '0');
+      const awayWin = parseFloat(odds['2'] || odds.away || odds['1x2']?.[2] || '0');
+
+      if (homeWin > 1 && awayWin > 1) {
+        results.push({
+          homeTeam,
+          awayTeam,
+          homeWin,
+          draw: draw > 1 ? draw : undefined,
+          awayWin,
+          source: 'oddsportal-api',
+          bookmakerCount: 1,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return results;
 }
 
 function matchEventToOdds(event: any, scrapedOdds: NormalizedOdds[]): NormalizedOdds | null {
