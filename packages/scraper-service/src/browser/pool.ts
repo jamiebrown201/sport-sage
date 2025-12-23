@@ -418,12 +418,19 @@ const BLOCKED_DOMAINS = [
 /**
  * Configure route blocking to reduce bandwidth and improve performance
  * Blocks images, fonts, CSS, analytics, and third-party scripts
+ * NOTE: OddsPortal is excluded from blocking due to bot detection
  */
 async function configureRouteBlocking(page: Page): Promise<void> {
   await page.route('**/*', (route) => {
     const request = route.request();
     const resourceType = request.resourceType();
     const url = request.url();
+
+    // OddsPortal: Allow ALL resources to avoid bot detection
+    // Their detection likely checks if resources load properly
+    if (url.includes('oddsportal.com') || url.includes('cci2.oddsportal')) {
+      return route.continue();
+    }
 
     // Block heavy resource types (images, fonts, CSS, etc.)
     if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) {
@@ -436,11 +443,9 @@ async function configureRouteBlocking(page: Page): Promise<void> {
     }
 
     // Block third-party scripts (only allow specific domains)
-    // NOTE: Don't block scripts for OddsPortal - it needs CDN scripts for Vue.js to work
     if (resourceType === 'script' &&
         !url.includes('flashscore.com') &&
         !url.includes('sofascore.com') &&
-        !url.includes('oddsportal.com') &&
         !url.includes('cloudflare') &&
         !url.includes('jsdelivr') &&
         !url.includes('unpkg') &&
@@ -453,5 +458,5 @@ async function configureRouteBlocking(page: Page): Promise<void> {
     return route.continue();
   });
 
-  logger.debug('Route blocking configured - blocking images, fonts, CSS, analytics, third-party scripts');
+  logger.debug('Route blocking configured - OddsPortal excluded, blocking images/fonts/CSS/analytics for others');
 }
