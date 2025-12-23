@@ -1,26 +1,26 @@
 // User schemas
-export * from './users';
+export * from './users.js';
 
 // Sports schemas
-export * from './sports';
+export * from './sports.js';
 
 // Events schemas
-export * from './events';
+export * from './events.js';
 
 // Predictions schemas
-export * from './predictions';
+export * from './predictions.js';
 
 // Transactions schemas
-export * from './transactions';
+export * from './transactions.js';
 
 // Gamification schemas
-export * from './gamification';
+export * from './gamification.js';
 
 // Social schemas
-export * from './social';
+export * from './social.js';
 
 // Shop schemas
-export * from './shop';
+export * from './shop.js';
 
 // Monitoring schemas
-export * from './monitoring';
+export * from './monitoring.js';

@@ -2,10 +2,10 @@ import { drizzle as drizzleDataApi } from 'drizzle-orm/aws-data-api/pg';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import pg from 'pg';
-import * as schema from './schema';
+import * as schema from './schema/index.js';
 
 // Re-export all schema
-export * from './schema';
+export * from './schema/index.js';
 
 // Database client singleton
 let db: ReturnType<typeof createDb> | null = null;
