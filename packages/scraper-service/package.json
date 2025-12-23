@@ -14,6 +14,7 @@
     "@sport-sage/database": "workspace:*",
     "@aws-sdk/client-sqs": "^3.700.0",
     "cheerio": "^1.0.0",
+    "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.2",
     "express": "^4.21.2",
     "node-cron": "^3.0.3",

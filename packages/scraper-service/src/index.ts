@@ -8,6 +8,7 @@
  * - Bot detection prevention
  */
 
+import 'dotenv/config';
 import express from 'express';
 import { logger } from './logger.js';
 import { initializeDatabase, closeDatabase } from './database/client.js';

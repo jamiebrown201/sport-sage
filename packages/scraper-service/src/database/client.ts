@@ -29,7 +29,9 @@ export function initializeDatabase(): void {
 
     if (host && user && password) {
       const ssl = process.env.DATABASE_SSL !== 'false' ? '?sslmode=require' : '';
-      process.env.DATABASE_URL = `postgresql://${user}:${password}@${host}:${port}/${database}${ssl}`;
+      // URL encode password to handle special characters
+      const encodedPassword = encodeURIComponent(password);
+      process.env.DATABASE_URL = `postgresql://${user}:${encodedPassword}@${host}:${port}/${database}${ssl}`;
       logger.info('Database URL constructed from components', { host, database });
     }
   }
