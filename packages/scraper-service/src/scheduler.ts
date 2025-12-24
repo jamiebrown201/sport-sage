@@ -244,7 +244,7 @@ const jobs: JobDefinition[] = [
   },
   {
     name: 'sync-live-scores',
-    schedule: '* * * * *', // Every minute
+    schedule: '*/2 * * * *', // Every 2 minutes
     handler: async () => {
       if (syncLiveScores) await syncLiveScores();
     },
