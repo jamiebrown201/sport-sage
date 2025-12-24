@@ -7,6 +7,7 @@
 
 import type { Page } from 'playwright';
 import type { OddsSource, OddsSourceConfig, NormalizedOdds } from './types.js';
+import { NoDataAvailableError, NO_DATA_PATTERNS } from './types.js';
 import { createJobLogger } from '../logger.js';
 import { waitWithJitter } from '../browser/behavior.js';
 import { writeFile, mkdir } from 'fs/promises';
@@ -201,6 +202,17 @@ async function scrapeUrl(page: Page, url: string, sportSlug: string): Promise<No
     });
 
     logger.info(`DOM parsing found ${scrapedEvents.length} events`);
+
+    // If no events found, check if the page shows "no data" messaging
+    if (scrapedEvents.length === 0) {
+      const pageText = await page.evaluate(() => document.body?.innerText || '');
+      for (const pattern of NO_DATA_PATTERNS) {
+        if (pattern.test(pageText)) {
+          logger.info(`Detected "no data" message on ${url}: ${pattern.toString()}`);
+          throw new NoDataAvailableError(`No matches available for ${sportSlug} on oddscanner`);
+        }
+      }
+    }
 
     for (const event of scrapedEvents) {
       if (event.odds) {

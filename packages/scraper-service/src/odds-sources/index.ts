@@ -11,6 +11,7 @@
 
 import type { Page } from 'playwright';
 import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult, SportSourceStats } from './types.js';
+import { NoDataAvailableError } from './types.js';
 import { oddsPortalSource } from './oddsportal.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
@@ -355,14 +356,27 @@ export async function scrapeWithRotation(
       const duration = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      recordFailure(source.config.name, errorMessage, sportSlug);
-      results.push({
-        source: source.config.name,
-        odds: [],
-        success: false,
-        error: errorMessage,
-        duration,
-      });
+      // Check if this is a "no data available" error (not a real failure)
+      if (error instanceof NoDataAvailableError) {
+        logger.info(`${source.config.name}: ${errorMessage} (not a failure)`);
+        results.push({
+          source: source.config.name,
+          odds: [],
+          success: true, // Treat as success - site worked, just no data
+          duration,
+        });
+        // Don't record failure - site is working fine
+      } else {
+        // Real error - record failure and penalize
+        recordFailure(source.config.name, errorMessage, sportSlug);
+        results.push({
+          source: source.config.name,
+          odds: [],
+          success: false,
+          error: errorMessage,
+          duration,
+        });
+      }
     }
   }
 

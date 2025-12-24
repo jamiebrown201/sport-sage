@@ -55,3 +55,28 @@ export interface SportSourceStats {
   lastSuccess: Date | null;
   lastFailure: Date | null;
 }
+
+/**
+ * Custom error for when a source explicitly shows "no data available"
+ * This is NOT a failure - the site works, just no matches scheduled.
+ * Examples: "No upcoming matches", "Odds will appear when available", etc.
+ */
+export class NoDataAvailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NoDataAvailableError';
+  }
+}
+
+/**
+ * Common patterns that indicate "no data" (not a failure)
+ */
+export const NO_DATA_PATTERNS = [
+  /no\s+(?:upcoming|scheduled|available)\s+(?:matches|events|games)/i,
+  /odds\s+will\s+(?:appear|feature|be\s+available)/i,
+  /(?:betting\s+)?odds\s+(?:for|on)\s+.+\s+will\s+feature\s+here/i,
+  /no\s+(?:events|matches)\s+(?:found|available)/i,
+  /currently\s+no\s+(?:odds|matches|events)/i,
+  /check\s+back\s+(?:later|soon)/i,
+  /no\s+(?:live|upcoming)\s+(?:events|matches)/i,
+];
