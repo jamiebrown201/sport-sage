@@ -13,6 +13,7 @@ import type { Page } from 'playwright';
 import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult, SportSourceStats } from './types.js';
 import { NoDataAvailableError, BotBlockedError } from './types.js';
 import { oddsPortalSource } from './oddsportal.js';
+import { betExplorerSource } from './betexplorer.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
 import { oddScannerSource } from './oddscanner.js';
@@ -24,6 +25,7 @@ const logger = createJobLogger('odds-sources');
 // All available sources
 export const allSources: OddsSource[] = [
   oddsPortalSource,
+  betExplorerSource, // Same company as OddsPortal, clean HTML
   bmBetsSource,
   oddScannerSource,
   nicerOddsSource,
