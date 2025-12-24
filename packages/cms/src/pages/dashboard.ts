@@ -5,6 +5,7 @@
 import { getDb, events, sports, teams, predictions, scraperRuns } from '@sport-sage/database';
 import { gte, lte, and, count, sql, desc, eq } from 'drizzle-orm';
 import { layout, timeAgo } from '../ui/layout.js';
+import { getIssuesWidget } from './issues.js';
 
 export async function handleDashboard(environment: string): Promise<string> {
   const db = getDb();
@@ -139,8 +140,14 @@ export async function handleDashboard(environment: string): Promise<string> {
     </tr>
   `).join('');
 
+  // Get issues widget
+  const issuesWidget = await getIssuesWidget();
+
   const content = `
     <h1>Dashboard</h1>
+
+    <!-- Issues Widget -->
+    ${issuesWidget}
 
     <!-- System Health Banner -->
     <div class="card" style="background: ${scraperHealthy ? '#0d4d3a' : recentRuns.length === 0 ? 'var(--bg-hover)' : '#4d3d0d'}; border-color: ${scraperHealthy ? 'var(--success)' : recentRuns.length === 0 ? 'var(--border)' : 'var(--warning)'}; margin-bottom: 20px;">

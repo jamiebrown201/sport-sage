@@ -31,7 +31,6 @@ export async function handleLiveScores(environment: string): Promise<string> {
       period: events.period,
       minute: events.minute,
       competition: events.competitionName,
-      sportSlug: events.sportSlug,
       startTime: events.startTime,
       updatedAt: events.updatedAt,
     })
@@ -154,12 +153,11 @@ export async function handleLiveScores(environment: string): Promise<string> {
             <td><a href="/events/${e.id}">${e.homeTeam} vs ${e.awayTeam}</a></td>
             <td style="font-family: monospace; font-size: 1.1em;">${scoreDisplay}</td>
             <td>${e.competition}</td>
-            <td>${e.sportSlug}</td>
             <td class="time-ago">${timeAgo(e.updatedAt)}</td>
           </tr>
         `;
       }).join('')
-    : '<tr><td colspan="6" class="empty">No live events</td></tr>';
+    : '<tr><td colspan="5" class="empty">No live events</td></tr>';
 
   // Build recently finished table
   const finishedRows = recentlyFinished.length > 0
@@ -220,7 +218,7 @@ export async function handleLiveScores(environment: string): Promise<string> {
     <div class="card">
       <h2 style="margin-top: 0;">Live Events (${liveEvents.length})</h2>
       <table>
-        <thead><tr><th>Status</th><th>Match</th><th>Score</th><th>Competition</th><th>Sport</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Status</th><th>Match</th><th>Score</th><th>Competition</th><th>Updated</th></tr></thead>
         <tbody>${liveRows}</tbody>
       </table>
     </div>

@@ -1,8 +1,8 @@
 /**
- * Predictions Page - Monitor user predictions and settlements
+ * Predictions Page - Monitor and manually settle user predictions
  */
 
-import { getDb, predictions, users, events } from '@sport-sage/database';
+import { getDb, predictions, users, events, userStats } from '@sport-sage/database';
 import { desc, eq, sql, and, gte, count } from 'drizzle-orm';
 import { layout, timeAgo } from '../ui/layout.js';
 
@@ -10,10 +10,10 @@ export async function handlePredictions(query: URLSearchParams, environment: str
   const db = getDb();
   const status = query.get('status') || '';
   const page = parseInt(query.get('page') || '1');
+  const flash = query.get('flash') || '';
   const limit = 50;
   const offset = (page - 1) * limit;
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   // Build conditions
   const conditions = [];
@@ -28,10 +28,11 @@ export async function handlePredictions(query: URLSearchParams, environment: str
       type: predictions.type,
       stake: predictions.stake,
       odds: predictions.odds,
-      potentialWin: predictions.potentialWin,
+      potentialCoins: predictions.potentialCoins,
       status: predictions.status,
       settledAt: predictions.settledAt,
       createdAt: predictions.createdAt,
+      userId: predictions.userId,
       username: users.username,
       homeTeam: events.homeTeamName,
       awayTeam: events.awayTeamName,
@@ -68,12 +69,12 @@ export async function handlePredictions(query: URLSearchParams, environment: str
   const totalSettled = (wonPredictions?.count || 0) + (lostPredictions?.count || 0);
   const winRate = totalSettled > 0 ? Math.round(((wonPredictions?.count || 0) / totalSettled) * 100) : 0;
 
-  // Build table rows
+  // Build table rows with manual settlement options
   const rows = allPredictions.map(p => {
-    const statusColor = p.status === 'won' ? 'success' : p.status === 'lost' ? 'error' : 'info';
+    const statusColor = p.status === 'won' ? 'success' : p.status === 'lost' ? 'error' : p.status === 'void' ? 'warning' : 'info';
     return `
       <tr>
-        <td>${p.username || 'Unknown'}</td>
+        <td><a href="/users/${p.userId}">${p.username || 'Unknown'}</a></td>
         <td>
           <a href="/events/${p.eventId}">${p.homeTeam} vs ${p.awayTeam}</a>
           <div style="font-size: 0.8em; color: var(--text-muted);">
@@ -82,17 +83,30 @@ export async function handlePredictions(query: URLSearchParams, environment: str
         </td>
         <td>${p.type}</td>
         <td>${p.stake} coins</td>
-        <td>${p.odds?.toFixed(2) || '-'}</td>
-        <td>${p.potentialWin?.toFixed(0) || '-'} coins</td>
+        <td>${p.odds ? Number(p.odds).toFixed(2) : '-'}</td>
+        <td>${p.potentialCoins || '-'} coins</td>
         <td><span class="badge badge-${statusColor}">${p.status}</span></td>
         <td class="time-ago">${timeAgo(p.createdAt)}</td>
-        <td class="time-ago">${p.settledAt ? timeAgo(p.settledAt) : '-'}</td>
+        <td>
+          ${p.status === 'pending' ? `
+            <form method="POST" action="/predictions/${p.id}/settle" style="display: flex; gap: 5px;">
+              <select name="result" style="padding: 4px 8px; font-size: 0.85em;">
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="void">Void</option>
+              </select>
+              <button type="submit" class="btn btn-sm">Settle</button>
+            </form>
+          ` : `<span class="time-ago">${p.settledAt ? timeAgo(p.settledAt) : '-'}</span>`}
+        </td>
       </tr>
     `;
   }).join('');
 
   const content = `
     <h1>Predictions</h1>
+
+    ${flash ? `<div class="flash flash-success">${flash}</div>` : ''}
 
     <!-- Stats -->
     <div class="stats-grid" style="margin-bottom: 30px;">
@@ -139,6 +153,9 @@ export async function handlePredictions(query: URLSearchParams, environment: str
         <option value="void" ${status === 'void' ? 'selected' : ''}>Void</option>
       </select>
       <button type="submit">Filter</button>
+      ${pendingPredictions?.count > 0 ? `
+        <a href="/predictions?status=pending" class="btn btn-secondary">View Pending (${pendingPredictions.count})</a>
+      ` : ''}
     </form>
 
     <!-- Predictions Table -->
@@ -154,7 +171,7 @@ export async function handlePredictions(query: URLSearchParams, environment: str
             <th>Potential</th>
             <th>Status</th>
             <th>Placed</th>
-            <th>Settled</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -171,4 +188,81 @@ export async function handlePredictions(query: URLSearchParams, environment: str
   `;
 
   return layout('Predictions', content, environment);
+}
+
+export async function settlePrediction(predictionId: string, result: 'won' | 'lost' | 'void'): Promise<{ success: boolean; message: string }> {
+  const db = getDb();
+  try {
+    // Get prediction details
+    const [prediction] = await db.select().from(predictions).where(eq(predictions.id, predictionId)).limit(1);
+    if (!prediction) {
+      return { success: false, message: 'Prediction not found' };
+    }
+
+    if (prediction.status !== 'pending') {
+      return { success: false, message: 'Prediction already settled' };
+    }
+
+    // Calculate settled amounts
+    let settledCoins = 0;
+    let settledStars = 0;
+
+    if (result === 'won') {
+      settledCoins = prediction.potentialCoins || 0;
+      settledStars = prediction.potentialStars || 0;
+    } else if (result === 'void') {
+      // Return stake on void
+      settledCoins = prediction.stake;
+      settledStars = 0;
+    }
+    // Lost = 0 coins, 0 stars
+
+    // Update prediction
+    await db.update(predictions)
+      .set({
+        status: result,
+        settledCoins,
+        settledStars,
+        settledAt: new Date(),
+      })
+      .where(eq(predictions.id, predictionId));
+
+    // Update user coins if won or void
+    if (settledCoins > 0) {
+      await db.update(users)
+        .set({
+          coins: sql`${users.coins} + ${settledCoins}`,
+          stars: sql`${users.stars} + ${settledStars}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, prediction.userId));
+    }
+
+    // Update user stats
+    if (result === 'won' || result === 'lost') {
+      const statsUpdate = result === 'won'
+        ? {
+            totalWins: sql`${userStats.totalWins} + 1`,
+            currentStreak: sql`${userStats.currentStreak} + 1`,
+            bestStreak: sql`GREATEST(${userStats.bestStreak}, ${userStats.currentStreak} + 1)`,
+            totalStarsEarned: sql`${userStats.totalStarsEarned} + ${settledStars}`,
+            biggestWin: sql`GREATEST(${userStats.biggestWin}, ${settledCoins})`,
+          }
+        : {
+            totalLosses: sql`${userStats.totalLosses} + 1`,
+            currentStreak: 0,
+          };
+
+      await db.update(userStats)
+        .set({
+          ...statsUpdate,
+          updatedAt: new Date(),
+        })
+        .where(eq(userStats.userId, prediction.userId));
+    }
+
+    return { success: true, message: `Prediction settled as ${result}` };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
 }

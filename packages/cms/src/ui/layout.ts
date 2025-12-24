@@ -44,7 +44,7 @@ export function layout(title: string, content: string, environment: string, show
       padding: 15px 20px;
       border-bottom: 1px solid var(--border);
       display: flex;
-      gap: 10px;
+      gap: 5px;
       align-items: center;
       flex-wrap: wrap;
     }
@@ -52,18 +52,24 @@ export function layout(title: string, content: string, environment: string, show
       font-weight: bold;
       color: var(--primary);
       font-size: 1.2em;
-      margin-right: 20px;
+      margin-right: 15px;
     }
     nav a {
       color: var(--text-muted);
       text-decoration: none;
-      padding: 8px 16px;
+      padding: 6px 12px;
       border-radius: 6px;
       transition: all 0.2s;
-      font-size: 0.95em;
+      font-size: 0.9em;
     }
     nav a:hover { color: var(--text-heading); background: var(--bg-hover); }
     nav a.active { color: var(--text-heading); background: var(--bg-hover); }
+    nav .divider {
+      width: 1px;
+      height: 20px;
+      background: var(--border);
+      margin: 0 8px;
+    }
     nav .env {
       margin-left: auto;
       background: #2d2d4d;
@@ -123,7 +129,7 @@ export function layout(title: string, content: string, environment: string, show
     .badge-info { background: #0d2d4d; color: var(--info); }
 
     /* Forms */
-    input[type="text"], select, textarea {
+    input[type="text"], input[type="number"], input[type="datetime-local"], select, textarea {
       background: var(--bg-input);
       border: 1px solid #444;
       color: var(--text);
@@ -131,9 +137,14 @@ export function layout(title: string, content: string, environment: string, show
       border-radius: 6px;
       font-size: 1em;
     }
-    input[type="text"]:focus, textarea:focus {
+    input[type="text"]:focus, input[type="number"]:focus, textarea:focus, select:focus {
       outline: none;
       border-color: var(--primary);
+    }
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
     }
 
     /* Buttons */
@@ -173,6 +184,7 @@ export function layout(title: string, content: string, environment: string, show
       display: flex;
       gap: 10px;
       margin-bottom: 20px;
+      flex-wrap: wrap;
     }
 
     /* Animations */
@@ -184,21 +196,37 @@ export function layout(title: string, content: string, environment: string, show
 
     /* Grid layouts */
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+    @media (max-width: 900px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   ${showNav ? `
   <nav>
-    <span class="logo">Sport Sage</span>
+    <span class="logo">Sport Sage CMS</span>
     <a href="/">Dashboard</a>
+    <a href="/issues">Issues</a>
+    <a href="/health">Health</a>
+    <span class="divider"></span>
     <a href="/scraper">Scraper</a>
-    <a href="/live-scores">Live Scores</a>
-    <a href="/predictions">Predictions</a>
+    <a href="/live-scores">Live</a>
     <a href="/events">Events</a>
+    <a href="/predictions">Predictions</a>
+    <span class="divider"></span>
+    <a href="/users">Users</a>
+    <a href="/sports">Sports</a>
     <a href="/teams">Teams</a>
     <a href="/competitions">Competitions</a>
-    <a href="/query">Query</a>
+    <span class="divider"></span>
+    <a href="/logs">Logs</a>
+    <a href="/analytics">Analytics</a>
+    <span class="divider"></span>
+    <a href="/bulk-settle">Settle</a>
+    <a href="/source-mapping">Mapping</a>
+    <a href="/lambdas">Lambdas</a>
+    <a href="/query">SQL</a>
     <span class="env">${environment}</span>
   </nav>
   ` : ''}
