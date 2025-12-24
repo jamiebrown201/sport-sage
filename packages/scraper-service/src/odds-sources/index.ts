@@ -34,6 +34,9 @@ const sourceUsage: Map<string, SourceUsage> = new Map();
 // Track sport-specific performance: Map<sourceName, Map<sportSlug, SportSourceStats>>
 const sportSourceStats: Map<string, Map<string, SportSourceStats>> = new Map();
 
+// Track last used source index for true round-robin rotation
+let lastUsedSourceIndex = -1;
+
 // Initialize usage tracking
 for (const source of allSources) {
   sourceUsage.set(source.config.name, {
@@ -246,6 +249,40 @@ export function getSource(name: string): OddsSource | undefined {
 }
 
 /**
+ * Get next source in round-robin order
+ * Cycles through sources regardless of priority, only respecting:
+ * - Cooldown (rate limiting)
+ * - Sport-specific avoidance (3+ consecutive failures)
+ */
+function getNextRoundRobinSource(
+  triedSources: Set<string>,
+  sportSlug: string,
+  useFallback: boolean = false
+): OddsSource | null {
+  const enabled = allSources.filter((s) => s.config.enabled);
+  if (enabled.length === 0) return null;
+
+  // Try each source starting from after the last used one
+  for (let offset = 1; offset <= enabled.length; offset++) {
+    const index = (lastUsedSourceIndex + offset) % enabled.length;
+    const source = enabled[index]!;
+
+    // Skip if already tried this scrape
+    if (triedSources.has(source.config.name)) continue;
+
+    // Skip if on cooldown (rate limiting)
+    if (isOnCooldown(source)) continue;
+
+    // Skip if avoided for this sport (unless using fallback)
+    if (!useFallback && shouldAvoidSourceForSport(source.config.name, sportSlug)) continue;
+
+    return source;
+  }
+
+  return null;
+}
+
+/**
  * Scrape from multiple sources with rotation
  *
  * @param page - Playwright page
@@ -262,31 +299,23 @@ export async function scrapeWithRotation(
   const triedSources = new Set<string>();
 
   for (let i = 0; i < maxSources; i++) {
-    // Get best available source that we haven't tried
-    // Filter out sources that have 3+ consecutive failures for this sport
-    const available = getEnabledSources().filter(
-      (s) =>
-        !triedSources.has(s.config.name) &&
-        !isOnCooldown(s) &&
-        !shouldAvoidSourceForSport(s.config.name, sportSlug)
-    );
+    // Get next source in round-robin order
+    let source = getNextRoundRobinSource(triedSources, sportSlug, false);
 
-    if (available.length === 0) {
-      // If all sources are avoided for this sport, try any available source as fallback
-      const fallback = getEnabledSources().filter(
-        (s) => !triedSources.has(s.config.name) && !isOnCooldown(s)
-      );
-      if (fallback.length === 0) break;
-      logger.info(`All preferred sources avoided for ${sportSlug}, using fallback`);
+    if (!source) {
+      // If all preferred sources unavailable, try fallback (ignored sport avoidance)
+      source = getNextRoundRobinSource(triedSources, sportSlug, true);
+      if (source) {
+        logger.info(`All preferred sources unavailable for ${sportSlug}, using fallback: ${source.config.name}`);
+      }
     }
 
-    // Score and pick best from available (or fallback)
-    const pool = available.length > 0 ? available : getEnabledSources().filter(
-      (s) => !triedSources.has(s.config.name) && !isOnCooldown(s)
-    );
-    if (pool.length === 0) break;
+    if (!source) break;
 
-    const source = pool[0]!;
+    // Update round-robin index
+    const enabled = allSources.filter((s) => s.config.enabled);
+    lastUsedSourceIndex = enabled.findIndex((s) => s.config.name === source!.config.name);
+
     triedSources.add(source.config.name);
 
     const startTime = Date.now();
