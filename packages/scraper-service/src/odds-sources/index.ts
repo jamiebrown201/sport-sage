@@ -14,6 +14,7 @@ import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult, SportSo
 import { NoDataAvailableError, BotBlockedError } from './types.js';
 import { oddsPortalSource } from './oddsportal.js';
 import { betExplorerSource } from './betexplorer.js';
+import { oddsDiggerSource } from './oddsdigger.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
 import { oddScannerSource } from './oddscanner.js';
@@ -26,6 +27,7 @@ const logger = createJobLogger('odds-sources');
 export const allSources: OddsSource[] = [
   oddsPortalSource,
   betExplorerSource, // Same company as OddsPortal, clean HTML
+  oddsDiggerSource, // JS-heavy but good coverage
   bmBetsSource,
   oddScannerSource,
   nicerOddsSource,
