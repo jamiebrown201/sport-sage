@@ -7,6 +7,7 @@ import { healthCheck as dbHealthCheck } from '../database/client.js';
 import { getBrowserPoolStats } from '../browser/pool.js';
 import { getMetrics } from '../monitoring/metrics.js';
 import { getJobStatus, triggerJob } from '../scheduler.js';
+import { getSourcesStatus } from '../odds-sources/index.js';
 import { logger } from '../logger.js';
 
 export const router: Router = express.Router();
@@ -69,4 +70,9 @@ router.post('/jobs/:jobName/trigger', async (req, res) => {
 // Job status endpoint
 router.get('/jobs', (_req, res) => {
   res.json(getJobStatus());
+});
+
+// Odds sources status endpoint
+router.get('/odds-sources', (_req, res) => {
+  res.json(getSourcesStatus());
 });

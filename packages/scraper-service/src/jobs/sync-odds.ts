@@ -1,8 +1,8 @@
 /**
  * Sync Odds Job
  *
- * Scrapes odds from OddsPortal and updates event markets.
- * Adapted from Lambda handler for VPS deployment.
+ * Scrapes odds from multiple sources with intelligent rotation.
+ * Sources: OddsPortal, BMBets, Odds Scanner, Nicer Odds, the-odds-api (fallback)
  */
 
 import { events, markets, outcomes } from '@sport-sage/database';
@@ -11,51 +11,34 @@ import { getDb } from '../database/client.js';
 import { getBrowserPool } from '../browser/pool.js';
 import { createJobLogger } from '../logger.js';
 import { recordRequest } from '../monitoring/metrics.js';
-import { getRateLimitDetector } from '../rate-limit/detector.js';
 import { simulateHumanBehavior, waitWithJitter } from '../browser/behavior.js';
-import type { Page } from 'playwright';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import {
+  scrapeWithRotation,
+  getSourcesStatus,
+  type NormalizedOdds,
+} from '../odds-sources/index.js';
 
 const logger = createJobLogger('sync-odds');
-const DEBUG_DIR = '/tmp/scraper-debug';
 
 // The Odds API config (free tier: 500 requests/month)
 const ODDS_API_KEY = process.env.ODDS_API_KEY || '';
+
 const ODDS_API_BASE = 'https://api.the-odds-api.com/v4';
 
-// OddsPortal URLs - try multiple endpoints with fallbacks
-const SPORT_URLS: Record<string, string[]> = {
-  football: [
-    'https://www.oddsportal.com/matches/football/',
-    'https://www.oddsportal.com/football/england/premier-league/',
-    'https://www.oddsportal.com/football/spain/laliga/',
-  ],
-  basketball: [
-    'https://www.oddsportal.com/basketball/usa/nba/',
-    'https://www.oddsportal.com/matches/basketball/',
-  ],
-  tennis: [
-    'https://www.oddsportal.com/matches/tennis/',
-  ],
-};
-
-interface NormalizedOdds {
-  homeTeam: string;
-  awayTeam: string;
-  homeWin?: number;
-  draw?: number;
-  awayWin?: number;
-  source: string;
-  bookmakerCount?: number;
-}
-
 export async function runSyncOdds(): Promise<void> {
-  logger.info('Starting odds sync');
+  logger.info('Starting odds sync with multi-source rotation');
   const startTime = Date.now();
 
+  // Log source status
+  const sourcesStatus = getSourcesStatus();
+  logger.info('Source status:', { sources: Object.keys(sourcesStatus).map(name => ({
+    name,
+    enabled: sourcesStatus[name].enabled,
+    onCooldown: sourcesStatus[name].onCooldown,
+    cooldownRemaining: sourcesStatus[name].cooldownRemaining ? `${Math.round(sourcesStatus[name].cooldownRemaining! / 60000)}m` : null,
+  }))});
+
   const browserPool = getBrowserPool();
-  const rateLimiter = getRateLimitDetector();
   const db = getDb();
 
   // Get events starting within 24 hours
@@ -83,62 +66,86 @@ export async function runSyncOdds(): Promise<void> {
   logger.info(`Found ${upcomingEvents.length} events to sync odds for`);
 
   let totalUpdated = 0;
+  const sourceStats: Record<string, { success: number; failed: number }> = {};
 
   try {
     for (const sportSlug of ['football', 'tennis', 'basketball']) {
       logger.info(`Syncing odds for ${sportSlug}`);
 
-      let scrapedOdds: NormalizedOdds[] = [];
+      let allScrapedOdds: NormalizedOdds[] = [];
 
-      // Try OddsPortal scraping first
+      // Get a browser page for scraping
       const { page, release } = await browserPool.getPage();
 
       try {
-        // Wait for rate limit
-        await rateLimiter.waitForRateLimit('oddsportal.com');
-
-        // Simulate human behavior
+        // Simulate human behavior before scraping
         await simulateHumanBehavior(page);
 
-        // Scrape odds
-        scrapedOdds = await scrapeOddsPortal(page, sportSlug);
+        // Use the rotation system - try up to 2 sources
+        const results = await scrapeWithRotation(page, sportSlug, 2);
 
-        if (scrapedOdds.length > 0) {
-          recordRequest('oddsportal', true, Date.now() - startTime);
-          rateLimiter.recordSuccess('oddsportal.com');
-          logger.info(`Got ${scrapedOdds.length} odds from OddsPortal for ${sportSlug}`);
+        // Collect odds from all successful sources
+        for (const result of results) {
+          if (!sourceStats[result.source]) {
+            sourceStats[result.source] = { success: 0, failed: 0 };
+          }
+
+          if (result.success && result.odds.length > 0) {
+            sourceStats[result.source].success++;
+            recordRequest(result.source, true, result.duration);
+
+            // Deduplicate and add to collection
+            for (const odds of result.odds) {
+              const exists = allScrapedOdds.some(
+                (o) =>
+                  o.homeTeam.toLowerCase() === odds.homeTeam.toLowerCase() &&
+                  o.awayTeam.toLowerCase() === odds.awayTeam.toLowerCase()
+              );
+              if (!exists) {
+                allScrapedOdds.push(odds);
+              }
+            }
+          } else {
+            sourceStats[result.source].failed++;
+            recordRequest(result.source, false, result.duration, { blocked: true });
+          }
         }
-      } catch (error) {
-        recordRequest('oddsportal', false, Date.now() - startTime, { blocked: true });
-        rateLimiter.recordFailure('oddsportal.com');
-        logger.warn(`OddsPortal scraping failed for ${sportSlug}`, { error });
       } finally {
         await release();
       }
 
-      // Fallback to the-odds-api.com if OddsPortal didn't return results
-      if (scrapedOdds.length === 0 && ODDS_API_KEY) {
-        logger.info(`OddsPortal returned no results, trying the-odds-api for ${sportSlug}`);
+      // Fallback to the-odds-api.com if web scraping didn't return results
+      if (allScrapedOdds.length === 0 && ODDS_API_KEY) {
+        logger.info(`Web scraping returned no results, trying the-odds-api for ${sportSlug}`);
         try {
-          scrapedOdds = await fetchFromTheOddsApi(sportSlug);
-          if (scrapedOdds.length > 0) {
-            logger.info(`Got ${scrapedOdds.length} odds from the-odds-api for ${sportSlug}`);
+          const apiOdds = await fetchFromTheOddsApi(sportSlug);
+          if (apiOdds.length > 0) {
+            logger.info(`Got ${apiOdds.length} odds from the-odds-api for ${sportSlug}`);
+            allScrapedOdds = apiOdds;
+            if (!sourceStats['the-odds-api']) {
+              sourceStats['the-odds-api'] = { success: 0, failed: 0 };
+            }
+            sourceStats['the-odds-api'].success++;
           }
         } catch (error) {
           logger.warn(`the-odds-api failed for ${sportSlug}`, { error });
+          if (!sourceStats['the-odds-api']) {
+            sourceStats['the-odds-api'] = { success: 0, failed: 0 };
+          }
+          sourceStats['the-odds-api'].failed++;
         }
       }
 
-      if (scrapedOdds.length === 0) {
-        logger.info(`No odds found for ${sportSlug}`);
+      if (allScrapedOdds.length === 0) {
+        logger.info(`No odds found for ${sportSlug} from any source`);
         continue;
       }
 
-      logger.info(`Got ${scrapedOdds.length} events with odds for ${sportSlug}`);
+      logger.info(`Got ${allScrapedOdds.length} total events with odds for ${sportSlug}`);
 
       // Match scraped odds to our events
       for (const evt of upcomingEvents) {
-        const matched = matchEventToOdds(evt, scrapedOdds);
+        const matched = matchEventToOdds(evt, allScrapedOdds);
 
         if (matched) {
           await updateEventOdds(db, evt, matched);
@@ -153,6 +160,7 @@ export async function runSyncOdds(): Promise<void> {
     logger.info('Odds sync completed', {
       updated: totalUpdated,
       durationMs: Date.now() - startTime,
+      sourceStats,
     });
   } catch (error) {
     logger.error('Odds sync failed', { error });
@@ -243,6 +251,7 @@ async function fetchFromTheOddsApi(sportSlug: string): Promise<NormalizedOdds[]>
               awayWin: bestAway,
               source: 'the-odds-api',
               bookmakerCount,
+              scrapedAt: new Date(),
             });
           }
         } catch {
@@ -259,261 +268,7 @@ async function fetchFromTheOddsApi(sportSlug: string): Promise<NormalizedOdds[]>
   return results;
 }
 
-async function scrapeOddsPortal(page: Page, sportSlug: string): Promise<NormalizedOdds[]> {
-  const allOdds: NormalizedOdds[] = [];
-  const urls = SPORT_URLS[sportSlug] || SPORT_URLS.football;
-
-  logger.info(`OddsPortal: Fetching ${sportSlug} odds from ${urls.length} URL(s)`);
-
-  // Try each URL until we get enough events
-  for (const url of urls) {
-    try {
-      const urlOdds = await scrapeOddsUrl(page, url, sportSlug);
-
-      // Deduplicate by team names
-      for (const odds of urlOdds) {
-        const exists = allOdds.some(
-          (o) =>
-            o.homeTeam.toLowerCase() === odds.homeTeam.toLowerCase() &&
-            o.awayTeam.toLowerCase() === odds.awayTeam.toLowerCase()
-        );
-        if (!exists) {
-          allOdds.push(odds);
-        }
-      }
-
-      // If we got enough events, stop
-      if (allOdds.length >= 20) {
-        logger.info(`OddsPortal: Got ${allOdds.length} events, stopping URL iteration`);
-        break;
-      }
-    } catch (error) {
-      logger.warn(`Failed to scrape OddsPortal URL: ${url}`, { error });
-    }
-
-    // Small delay between URLs
-    await waitWithJitter(1000);
-  }
-
-  logger.info(`OddsPortal: Retrieved ${allOdds.length} total ${sportSlug} events`);
-  return allOdds;
-}
-
-async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promise<NormalizedOdds[]> {
-  const odds: NormalizedOdds[] = [];
-
-  logger.info(`OddsPortal: Scraping ${url}`);
-
-  try {
-    // Use networkidle for dynamic content
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
-    await waitWithJitter(2000);
-
-    // Handle cookie consent - OddsPortal uses OneTrust
-    try {
-      const consentButton = await page.$('#onetrust-accept-btn-handler, [id*="accept"], button[class*="accept"], .onetrust-close-btn-handler');
-      if (consentButton) {
-        await consentButton.click();
-        logger.info('OddsPortal: Clicked cookie consent button');
-        await waitWithJitter(2000);
-      }
-    } catch {
-      // No consent button, continue
-    }
-
-    // Scroll to trigger lazy loading
-    await page.evaluate(() => {
-      window.scrollBy(0, 500);
-    });
-    await waitWithJitter(1500);
-
-    // Additional scroll and wait for Vue hydration
-    await page.evaluate(() => {
-      window.scrollTo(0, 0);
-      window.scrollBy(0, 300);
-    });
-    await waitWithJitter(3000);
-
-    // Wait for content to load with fallback
-    await page
-      .waitForSelector(
-        '[class*="eventRow"], [class*="event-row"], [class*="flex"][class*="border"], table tbody tr',
-        { timeout: 15000 }
-      )
-      .catch(() => {
-        logger.warn('OddsPortal: No event rows found');
-      });
-
-    await waitWithJitter(2000);
-
-    // Debug: Log page info and save HTML for analysis
-    const debugInfo = await page.evaluate(() => {
-      const title = document.title;
-      const currentUrl = window.location.href;
-      const eventRows = document.querySelectorAll('[class*="eventRow"]').length;
-      const allLinks = document.querySelectorAll('a').length;
-      const oddsPattern = (document.body.textContent || '').match(/\d+\.\d{1,2}/g) || [];
-      const html = document.body.innerHTML;
-
-      // Look for any divs that might contain match data
-      const flexDivs = document.querySelectorAll('div.flex').length;
-      const borderDivs = document.querySelectorAll('div[class*="border"]').length;
-      const groupDivs = document.querySelectorAll('div[class*="group"]').length;
-
-      // Find any text containing team-like patterns
-      const teamMatches = (document.body.textContent || '').match(/[A-Z][a-z]+ [A-Z][a-z]+ - [A-Z][a-z]+ [A-Z][a-z]+/g) || [];
-
-      return { title, currentUrl, eventRows, allLinks, oddsCount: oddsPattern.length, htmlLength: html.length, flexDivs, borderDivs, groupDivs, teamMatches: teamMatches.slice(0, 5), html };
-    });
-    logger.info(
-      `OddsPortal Debug: ${debugInfo.title}, eventRows=${debugInfo.eventRows}, links=${debugInfo.allLinks}, oddsPatterns=${debugInfo.oddsCount}, flexDivs=${debugInfo.flexDivs}, borderDivs=${debugInfo.borderDivs}, groupDivs=${debugInfo.groupDivs}`
-    );
-    if (debugInfo.teamMatches.length > 0) {
-      logger.info(`OddsPortal Debug: Team matches found: ${debugInfo.teamMatches.join(', ')}`);
-    }
-
-    // Save HTML for debugging (only once per sport)
-    try {
-      await mkdir(DEBUG_DIR, { recursive: true });
-      const filename = join(DEBUG_DIR, `oddsportal-${sportSlug}-${Date.now()}.html`);
-      await writeFile(filename, debugInfo.html);
-      logger.info(`OddsPortal Debug: Saved HTML to ${filename}`);
-    } catch (e) {
-      // Ignore write errors
-    }
-
-    // Try JSON-LD structured data first (most reliable)
-    const jsonLdEvents = await page.evaluate(() => {
-      const results: Array<{ homeTeam: string; awayTeam: string }> = [];
-      const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-      scripts.forEach((script) => {
-        try {
-          const data = JSON.parse(script.textContent || '');
-          const events = Array.isArray(data) ? data : [data];
-          events.forEach((event) => {
-            if (event['@type']?.includes('SportsEvent') && event.name) {
-              const parts = event.name.split(' - ');
-              if (parts.length === 2) {
-                results.push({ homeTeam: parts[0].trim(), awayTeam: parts[1].trim() });
-              }
-            }
-          });
-        } catch {
-          // Skip invalid JSON
-        }
-      });
-      return results;
-    });
-
-    if (jsonLdEvents.length > 0) {
-      logger.info(`OddsPortal: Found ${jsonLdEvents.length} events from JSON-LD`);
-    }
-
-    // Extract events with odds from DOM using OddsPortal's specific structure
-    const scrapedEvents = await page.evaluate(() => {
-      const results: Array<{
-        homeTeam: string;
-        awayTeam: string;
-        odds: { home: string; draw: string; away: string } | null;
-      }> = [];
-
-      // OddsPortal uses eventRow class for each match
-      const eventRows = document.querySelectorAll('.eventRow, [class*="eventRow"]');
-
-      eventRows.forEach((row) => {
-        try {
-          // Get team names from .participant-name elements
-          const participantNames = row.querySelectorAll('.participant-name');
-          if (participantNames.length < 2) return;
-
-          const homeTeam = participantNames[0]?.textContent?.trim() || '';
-          const awayTeam = participantNames[1]?.textContent?.trim() || '';
-
-          if (!homeTeam || !awayTeam || homeTeam.length < 2 || awayTeam.length < 2) return;
-
-          // Get odds from data-testid elements
-          // For 2-way markets (basketball): odd-container-winning (home), odd-container-default (away)
-          // For 3-way markets (football): there would be 3 odds containers
-          const winningOdds = row.querySelector('[data-testid="odd-container-winning"]');
-          const defaultOdds = row.querySelector('[data-testid="odd-container-default"]');
-
-          // Also check for all p elements with data-testid containing "odd"
-          const allOddsElements = row.querySelectorAll('p[data-testid*="odd-container"]');
-          const oddsValues: string[] = [];
-
-          allOddsElements.forEach((el) => {
-            const text = el.textContent?.trim() || '';
-            // Must be a decimal number like "1.26" or "3.94"
-            if (/^\d+\.\d+$/.test(text)) {
-              oddsValues.push(text);
-            }
-          });
-
-          // Fallback: try to get from specific elements
-          if (oddsValues.length === 0) {
-            const homeOdds = winningOdds?.textContent?.trim() || '';
-            const awayOdds = defaultOdds?.textContent?.trim() || '';
-            if (/^\d+\.\d+$/.test(homeOdds)) oddsValues.push(homeOdds);
-            if (/^\d+\.\d+$/.test(awayOdds)) oddsValues.push(awayOdds);
-          }
-
-          let oddsData: { home: string; draw: string; away: string } | null = null;
-          if (oddsValues.length >= 2) {
-            if (oddsValues.length === 2) {
-              // 2-way market (basketball, tennis)
-              oddsData = { home: oddsValues[0]!, draw: '', away: oddsValues[1]! };
-            } else if (oddsValues.length >= 3) {
-              // 3-way market (football)
-              oddsData = { home: oddsValues[0]!, draw: oddsValues[1]!, away: oddsValues[2]! };
-            }
-          }
-
-          if (oddsData) {
-            results.push({ homeTeam, awayTeam, odds: oddsData });
-          }
-        } catch {
-          // Skip failed rows
-        }
-      });
-
-      return results;
-    });
-
-    logger.info(`OddsPortal: DOM parsing found ${scrapedEvents.length} events`);
-
-    // Convert to NormalizedOdds
-    for (const event of scrapedEvents) {
-      if (event.odds) {
-        const homeWin = parseFloat(event.odds.home);
-        const draw = event.odds.draw ? parseFloat(event.odds.draw) : undefined;
-        const awayWin = parseFloat(event.odds.away);
-
-        if (!isNaN(homeWin) && !isNaN(awayWin) && homeWin > 1 && awayWin > 1) {
-          odds.push({
-            homeTeam: event.homeTeam,
-            awayTeam: event.awayTeam,
-            homeWin,
-            draw: draw && !isNaN(draw) && draw > 1 ? draw : undefined,
-            awayWin,
-            source: 'oddsportal',
-            bookmakerCount: 1,
-          });
-        }
-      }
-    }
-
-    // If DOM parsing found nothing but JSON-LD has events, log it
-    if (odds.length === 0 && jsonLdEvents.length > 0) {
-      logger.info(`OddsPortal: DOM found no odds, JSON-LD has ${jsonLdEvents.length} fixture names only`);
-    }
-
-    logger.info(`OddsPortal: Retrieved ${odds.length} events with valid odds from ${url}`);
-  } catch (error) {
-    logger.warn(`Failed to scrape OddsPortal: ${url}`, { error });
-  }
-
-  return odds;
-}
+// OddsPortal scraping logic has been moved to odds-sources/oddsportal.ts
 
 function matchEventToOdds(event: any, scrapedOdds: NormalizedOdds[]): NormalizedOdds | null {
   const eventHome = normalizeTeamName(event.homeTeamName || '');
