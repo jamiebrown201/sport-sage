@@ -5,7 +5,7 @@
  * Adapted from Lambda handler for VPS deployment.
  */
 
-import { sports, competitions } from '@sport-sage/database';
+import { sports, competitions, findOrCreateTeam } from '@sport-sage/database';
 import { and, sql } from 'drizzle-orm';
 import { getDb } from '../database/client.js';
 import { getBrowserPool } from '../browser/pool.js';
@@ -656,7 +656,7 @@ function isWithinDays(date: Date, days: number): boolean {
   return date >= now && date <= maxDate;
 }
 
-// Simplified event deduplication
+// Simplified event deduplication with team normalization
 async function findOrCreateEvent(
   fixture: ScrapedFixture,
   sportId: string,
@@ -675,14 +675,21 @@ async function findOrCreateEvent(
     return { eventId: (existing.rows[0] as any).id, isNew: false };
   }
 
-  // Create new event
+  // Find or create teams using the normalization system
+  // This creates team entries in the teams table and auto-learns aliases
+  const homeTeamId = await findOrCreateTeam(db as any, fixture.homeTeam, fixture.source);
+  const awayTeamId = await findOrCreateTeam(db as any, fixture.awayTeam, fixture.source);
+
+  // Create new event with team IDs linked
   const result = await db.execute(sql`
     INSERT INTO events (
       sport_id, competition_id, competition_name,
+      home_team_id, away_team_id,
       home_team_name, away_team_name,
       start_time, status, external_flashscore_id
     ) VALUES (
       ${sportId}::uuid, ${competitionId}::uuid, ${fixture.competition},
+      ${homeTeamId}::uuid, ${awayTeamId}::uuid,
       ${fixture.homeTeam}, ${fixture.awayTeam},
       ${fixture.startTime.toISOString()}::timestamptz, 'scheduled'::event_status,
       ${fixture.externalId}

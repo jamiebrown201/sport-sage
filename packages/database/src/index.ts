@@ -7,6 +7,9 @@ import * as schema from './schema/index.js';
 // Re-export all schema
 export * from './schema/index.js';
 
+// Re-export team utilities
+export * from './utils/team-utils.js';
+
 // Database client singleton
 let db: ReturnType<typeof createDb> | null = null;
 
