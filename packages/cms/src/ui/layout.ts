@@ -192,11 +192,9 @@ export function layout(title: string, content: string, environment: string, show
   <nav>
     <span class="logo">Sport Sage</span>
     <a href="/">Dashboard</a>
+    <a href="/scraper">Scraper</a>
     <a href="/live-scores">Live Scores</a>
     <a href="/predictions">Predictions</a>
-    <a href="/monitoring">Monitoring</a>
-    <a href="/lifecycle">Lifecycle</a>
-    <a href="/lambdas">Lambdas</a>
     <a href="/events">Events</a>
     <a href="/teams">Teams</a>
     <a href="/competitions">Competitions</a>

@@ -235,9 +235,10 @@ export async function handleDashboard(environment: string): Promise<string> {
       <div style="display: flex; gap: 15px; flex-wrap: wrap;">
         <a href="/live-scores" class="btn">Live Scores</a>
         <a href="/predictions" class="btn">Predictions</a>
-        <a href="/lambdas/trigger/sync-live-scores" class="btn btn-secondary">Trigger Live Scores</a>
-        <a href="/lambdas/trigger/sync-fixtures" class="btn btn-secondary">Trigger Fixtures</a>
-        <a href="/lambdas/trigger/sync-odds" class="btn btn-secondary">Trigger Odds</a>
+        <a href="/scraper" class="btn">Scraper Status</a>
+        <a href="/scraper/trigger/sync-live-scores" class="btn btn-secondary">Trigger Live Scores</a>
+        <a href="/scraper/trigger/sync-fixtures" class="btn btn-secondary">Trigger Fixtures</a>
+        <a href="/scraper/trigger/sync-odds" class="btn btn-secondary">Trigger Odds</a>
         <a href="/query" class="btn btn-secondary">SQL Query</a>
       </div>
     </div>

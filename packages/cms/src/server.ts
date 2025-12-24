@@ -19,6 +19,7 @@ import { handleMonitoring, handleAcknowledgeAlert } from './pages/monitoring.js'
 import { handleDashboard } from './pages/dashboard.js';
 import { handleLifecycle } from './pages/lifecycle.js';
 import { handleLambdas, handleLambdaLogs, invokeLambda } from './pages/lambdas.js';
+import { handleScraper, triggerScraperJob } from './pages/scraper.js';
 import { handleEvents } from './pages/events.js';
 import { handleEventDetail } from './pages/event-detail.js';
 import { handleLiveScores } from './pages/live-scores.js';
@@ -73,6 +74,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Scraper job trigger via GET
+  if (path.startsWith('/scraper/trigger/')) {
+    const jobName = path.split('/').pop()!;
+    const result = await triggerScraperJob(jobName);
+    res.writeHead(302, { Location: `/scraper?flash=${encodeURIComponent(result.message)}` });
+    res.end();
+    return;
+  }
+
   // Database not configured
   if (!dbConfig.configured) {
     res.end(layout('Database Required', `
@@ -105,6 +115,10 @@ pnpm --filter @sport-sage/cms start</pre>
 
       case path === '/lifecycle':
         body = await handleLifecycle(ENVIRONMENT);
+        break;
+
+      case path === '/scraper':
+        body = await handleScraper(ENVIRONMENT, query.get('flash') || undefined);
         break;
 
       case path === '/lambdas':
@@ -180,11 +194,10 @@ server.listen(PORT, () => {
   ║                                                        ║
   ║   Pages:                                               ║
   ║   • /            Dashboard overview                    ║
+  ║   • /scraper     Scraper service status                ║
   ║   • /live-scores Live scores & source health           ║
   ║   • /predictions Predictions & bets                    ║
-  ║   • /monitoring  Scraper health & alerts               ║
   ║   • /events      Browse events (/:id for detail)       ║
-  ║   • /lambdas     Lambda functions                      ║
   ║   • /query       SQL query runner                      ║
   ║                                                        ║
   ╚════════════════════════════════════════════════════════╝
