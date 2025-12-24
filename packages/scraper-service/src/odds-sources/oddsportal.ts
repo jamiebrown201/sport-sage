@@ -249,6 +249,10 @@ async function scrapeOddsUrl(page: Page, url: string, sportSlug: string): Promis
 
     logger.info(`Retrieved ${odds.length} events with valid odds from ${url}`);
   } catch (error) {
+    // Re-throw BotBlockedError and NoDataAvailableError so rotation logic can handle them
+    if (error instanceof BotBlockedError || error instanceof NoDataAvailableError) {
+      throw error;
+    }
     logger.warn(`Failed to scrape: ${url}`, { error });
   }
 

@@ -241,6 +241,10 @@ async function scrapeUrl(page: Page, url: string, sportSlug: string): Promise<No
 
     logger.info(`Retrieved ${odds.length} events with valid odds`);
   } catch (error) {
+    // Re-throw BotBlockedError and NoDataAvailableError so rotation logic can handle them
+    if (error instanceof BotBlockedError || error instanceof NoDataAvailableError) {
+      throw error;
+    }
     logger.warn(`Failed to scrape: ${url}`, { error });
   }
 
