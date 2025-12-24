@@ -80,3 +80,33 @@ export const NO_DATA_PATTERNS = [
   /check\s+back\s+(?:later|soon)/i,
   /no\s+(?:live|upcoming)\s+(?:events|matches)/i,
 ];
+
+/**
+ * Custom error for when a source blocks us (Cloudflare, captcha, etc.)
+ * This IS a failure - the site is blocking our scraper.
+ */
+export class BotBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BotBlockedError';
+  }
+}
+
+/**
+ * Patterns that indicate the site is blocking us (real failure)
+ */
+export const BOT_BLOCKED_PATTERNS = [
+  /enable\s+javascript\s+and\s+cookies\s+to\s+continue/i,
+  /challenge-error-text/i,
+  /cf[-_]?chl[-_]?/i, // Cloudflare challenge
+  /captcha/i,
+  /access\s+denied/i,
+  /please\s+verify\s+you\s+are\s+(?:a\s+)?human/i,
+  /bot\s+(?:detected|protection)/i,
+  /unusual\s+traffic/i,
+  /automated\s+access/i,
+  /rate\s+limit(?:ed)?/i,
+  /too\s+many\s+requests/i,
+  /blocked/i,
+  /forbidden/i,
+];

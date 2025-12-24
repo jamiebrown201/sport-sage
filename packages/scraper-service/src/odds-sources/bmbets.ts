@@ -7,7 +7,7 @@
 
 import type { Page } from 'playwright';
 import type { OddsSource, OddsSourceConfig, NormalizedOdds } from './types.js';
-import { NoDataAvailableError, NO_DATA_PATTERNS } from './types.js';
+import { NoDataAvailableError, NO_DATA_PATTERNS, BotBlockedError, BOT_BLOCKED_PATTERNS } from './types.js';
 import { createJobLogger } from '../logger.js';
 import { waitWithJitter } from '../browser/behavior.js';
 import { writeFile, mkdir } from 'fs/promises';
@@ -196,9 +196,20 @@ async function scrapeUrl(page: Page, url: string, sportSlug: string): Promise<No
 
     logger.info(`DOM parsing found ${scrapedEvents.length} events`);
 
-    // If no events found, check if the page shows "no data" messaging
+    // If no events found, check if we're blocked or if there's genuinely no data
     if (scrapedEvents.length === 0) {
+      const pageHtml = await page.evaluate(() => document.body?.innerHTML || '');
       const pageText = await page.evaluate(() => document.body?.innerText || '');
+
+      // First check if we're being blocked (Cloudflare, captcha, etc.)
+      for (const pattern of BOT_BLOCKED_PATTERNS) {
+        if (pattern.test(pageHtml) || pattern.test(pageText)) {
+          logger.warn(`Detected bot blocking on ${url}: ${pattern.toString()}`);
+          throw new BotBlockedError(`Blocked by bot protection on bmbets`);
+        }
+      }
+
+      // Then check if the page explicitly says "no data available"
       for (const pattern of NO_DATA_PATTERNS) {
         if (pattern.test(pageText)) {
           logger.info(`Detected "no data" message on ${url}: ${pattern.toString()}`);

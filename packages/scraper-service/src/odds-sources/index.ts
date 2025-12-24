@@ -11,7 +11,7 @@
 
 import type { Page } from 'playwright';
 import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult, SportSourceStats } from './types.js';
-import { NoDataAvailableError } from './types.js';
+import { NoDataAvailableError, BotBlockedError } from './types.js';
 import { oddsPortalSource } from './oddsportal.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
@@ -358,7 +358,7 @@ export async function scrapeWithRotation(
 
       // Check if this is a "no data available" error (not a real failure)
       if (error instanceof NoDataAvailableError) {
-        logger.info(`${source.config.name}: ${errorMessage} (not a failure)`);
+        logger.info(`${source.config.name}: ${errorMessage} (not a failure - no matches scheduled)`);
         results.push({
           source: source.config.name,
           odds: [],
@@ -366,8 +366,19 @@ export async function scrapeWithRotation(
           duration,
         });
         // Don't record failure - site is working fine
+      } else if (error instanceof BotBlockedError) {
+        // Bot detection - this IS a real failure, needs cooldown
+        logger.warn(`${source.config.name}: BLOCKED by bot protection for ${sportSlug}`);
+        recordFailure(source.config.name, errorMessage, sportSlug);
+        results.push({
+          source: source.config.name,
+          odds: [],
+          success: false,
+          error: errorMessage,
+          duration,
+        });
       } else {
-        // Real error - record failure and penalize
+        // Other error - record failure and penalize
         recordFailure(source.config.name, errorMessage, sportSlug);
         results.push({
           source: source.config.name,
