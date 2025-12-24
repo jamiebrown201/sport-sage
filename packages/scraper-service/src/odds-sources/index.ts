@@ -339,14 +339,17 @@ export async function scrapeWithRotation(
         // If we got good results, we can stop
         if (odds.length >= 10) break;
       } else {
-        recordFailure(source.config.name, 'No odds returned', sportSlug);
+        // No odds returned - this is NOT a failure if the page loaded successfully
+        // It just means there's no data (e.g., tennis during off-season/holidays)
+        // Don't penalize the source for having no data
+        logger.info(`${source.config.name}: No odds available for ${sportSlug} (not a failure - no matches scheduled)`);
         results.push({
           source: source.config.name,
           odds: [],
-          success: false,
-          error: 'No odds returned',
+          success: true, // Mark as success - site worked, just no data
           duration,
         });
+        // Don't record failure - this is expected when sports are off-season
       }
     } catch (error) {
       const duration = Date.now() - startTime;
