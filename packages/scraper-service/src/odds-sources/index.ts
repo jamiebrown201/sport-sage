@@ -18,6 +18,7 @@ import { oddsDiggerSource } from './oddsdigger.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
 import { oddScannerSource } from './oddscanner.js';
+import { coversSource } from './covers.js';
 import { createJobLogger } from '../logger.js';
 import { getRateLimitDetector } from '../rate-limit/detector.js';
 
@@ -31,6 +32,7 @@ export const allSources: OddsSource[] = [
   bmBetsSource,
   oddScannerSource,
   nicerOddsSource,
+  coversSource, // US-focused (NBA, NFL, MLB)
 ];
 
 // Track source usage (global)
