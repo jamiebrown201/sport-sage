@@ -294,3 +294,12 @@ export function getSourcesStatus(): Record<string, {
 }
 
 export { NormalizedOdds, OddsSourceResult } from './types.js';
+export {
+  normalizeTeamName,
+  stringSimilarity,
+  isSameMatch,
+  validateOdds,
+  mergeOdds,
+  getSourcePriorities,
+  SPORT_MARKET_TYPES,
+} from './utils.js';

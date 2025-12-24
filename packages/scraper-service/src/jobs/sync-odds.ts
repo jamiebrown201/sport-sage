@@ -15,6 +15,10 @@ import { simulateHumanBehavior, waitWithJitter } from '../browser/behavior.js';
 import {
   scrapeWithRotation,
   getSourcesStatus,
+  mergeOdds,
+  getSourcePriorities,
+  normalizeTeamName,
+  stringSimilarity,
   type NormalizedOdds,
 } from '../odds-sources/index.js';
 
@@ -84,7 +88,9 @@ export async function runSyncOdds(): Promise<void> {
         // Use the rotation system - try up to 2 sources
         const results = await scrapeWithRotation(page, sportSlug, 2);
 
-        // Collect odds from all successful sources
+        // Collect odds from all successful sources (raw, unmerged)
+        const rawOdds: NormalizedOdds[] = [];
+
         for (const result of results) {
           if (!sourceStats[result.source]) {
             sourceStats[result.source] = { success: 0, failed: 0 };
@@ -93,23 +99,14 @@ export async function runSyncOdds(): Promise<void> {
           if (result.success && result.odds.length > 0) {
             sourceStats[result.source].success++;
             recordRequest(result.source, true, result.duration);
-
-            // Deduplicate and add to collection
-            for (const odds of result.odds) {
-              const exists = allScrapedOdds.some(
-                (o) =>
-                  o.homeTeam.toLowerCase() === odds.homeTeam.toLowerCase() &&
-                  o.awayTeam.toLowerCase() === odds.awayTeam.toLowerCase()
-              );
-              if (!exists) {
-                allScrapedOdds.push(odds);
-              }
-            }
+            rawOdds.push(...result.odds);
           } else {
             sourceStats[result.source].failed++;
             recordRequest(result.source, false, result.duration, { blocked: true });
           }
         }
+
+        allScrapedOdds = rawOdds;
       } finally {
         await release();
       }
@@ -141,11 +138,13 @@ export async function runSyncOdds(): Promise<void> {
         continue;
       }
 
-      logger.info(`Got ${allScrapedOdds.length} total events with odds for ${sportSlug}`);
+      // Merge and deduplicate odds with validation and priority handling
+      const mergedOdds = mergeOdds(allScrapedOdds, sportSlug, getSourcePriorities());
+      logger.info(`Merged ${allScrapedOdds.length} raw odds into ${mergedOdds.length} validated matches for ${sportSlug}`);
 
-      // Match scraped odds to our events
+      // Match merged odds to our events
       for (const evt of upcomingEvents) {
-        const matched = matchEventToOdds(evt, allScrapedOdds);
+        const matched = matchEventToOdds(evt, mergedOdds);
 
         if (matched) {
           await updateEventOdds(db, evt, matched);
@@ -299,57 +298,7 @@ function matchEventToOdds(event: any, scrapedOdds: NormalizedOdds[]): Normalized
   return bestMatch;
 }
 
-function normalizeTeamName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/\bfc\b/gi, '')
-    .replace(/\bsc\b/gi, '')
-    .replace(/\bunited\b/gi, 'utd')
-    .replace(/\bcity\b/gi, '')
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function stringSimilarity(a: string, b: string): number {
-  if (a === b) return 1;
-  if (!a || !b) return 0;
-
-  const longer = a.length > b.length ? a : b;
-  const shorter = a.length > b.length ? b : a;
-
-  if (longer.length === 0) return 1;
-
-  const editDistance = levenshteinDistance(longer, shorter);
-  return (longer.length - editDistance) / longer.length;
-}
-
-function levenshteinDistance(a: string, b: string): number {
-  const matrix: number[][] = [];
-
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
-
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      if (b[i - 1] === a[j - 1]) {
-        matrix[i][j] = matrix[i - 1][j - 1];
-      } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
-      }
-    }
-  }
-
-  return matrix[b.length][a.length];
-}
+// normalizeTeamName, stringSimilarity, levenshteinDistance moved to odds-sources/utils.ts
 
 async function updateEventOdds(db: any, event: any, odds: NormalizedOdds): Promise<void> {
   const mainMarket = event.markets.find((m: any) => m.type === 'match_winner');
