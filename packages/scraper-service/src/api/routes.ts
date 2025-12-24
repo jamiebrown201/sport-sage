@@ -8,6 +8,7 @@ import { getBrowserPoolStats } from '../browser/pool.js';
 import { getMetrics } from '../monitoring/metrics.js';
 import { getJobStatus, triggerJob } from '../scheduler.js';
 import { getSourcesStatus } from '../odds-sources/index.js';
+import { runBackfillTeams } from '../jobs/backfill-teams.js';
 import { logger } from '../logger.js';
 
 export const router: Router = express.Router();
@@ -75,4 +76,21 @@ router.get('/jobs', (_req, res) => {
 // Odds sources status endpoint
 router.get('/odds-sources', (_req, res) => {
   res.json(getSourcesStatus());
+});
+
+// One-time backfill to create teams from existing events
+router.post('/backfill/teams', async (_req, res) => {
+  logger.info('Team backfill triggered');
+
+  try {
+    // Run in background so we don't block the request
+    runBackfillTeams().catch((error) => {
+      logger.error('Team backfill failed', { error });
+    });
+
+    res.json({ success: true, message: 'Team backfill started - check logs for progress' });
+  } catch (error) {
+    logger.error('Failed to start team backfill', { error });
+    res.status(500).json({ error: 'Failed to start team backfill' });
+  }
 });
