@@ -107,6 +107,8 @@ export const BOT_BLOCKED_PATTERNS = [
   /automated\s+access/i,
   /rate\s+limit(?:ed)?/i,
   /too\s+many\s+requests/i,
-  /blocked/i,
-  /forbidden/i,
+  /you\s+(?:have\s+been\s+)?blocked/i, // More specific than just "blocked"
+  /ip\s+(?:has\s+been\s+)?blocked/i,
+  /request\s+blocked/i,
+  /403\s+forbidden/i,
 ];
