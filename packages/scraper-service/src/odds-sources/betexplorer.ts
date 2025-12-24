@@ -139,16 +139,20 @@ async function scrapeUrl(page: Page, url: string, sportSlug: string): Promise<No
 
         // Get odds from data-odd attributes
         const oddsCells = row.querySelectorAll('td.table-main__odds');
-        if (oddsCells.length < 3) continue;
+        if (oddsCells.length < 2) continue; // Tennis has 2, football has 3
 
         // Get the button inside each cell which has the data-odd attribute
         const homeOddBtn = oddsCells[0].querySelector('button[data-odd]');
-        const drawOddBtn = oddsCells[1].querySelector('button[data-odd]');
-        const awayOddBtn = oddsCells[2].querySelector('button[data-odd]');
+        const awayOddBtn = oddsCells.length >= 3
+          ? oddsCells[2].querySelector('button[data-odd]')
+          : oddsCells[1].querySelector('button[data-odd]'); // Tennis: 2nd cell is away
+        const drawOddBtn = oddsCells.length >= 3
+          ? oddsCells[1].querySelector('button[data-odd]')
+          : null; // No draw for tennis
 
         const homeOdd = homeOddBtn?.getAttribute('data-odd') || '';
-        const drawOdd = drawOddBtn?.getAttribute('data-odd') || '';
         const awayOdd = awayOddBtn?.getAttribute('data-odd') || '';
+        const drawOdd = drawOddBtn?.getAttribute('data-odd') || '';
 
         if (homeOdd && awayOdd) {
           results.push({
