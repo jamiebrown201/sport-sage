@@ -46,3 +46,12 @@ export interface SourceUsage {
   consecutiveFailures: number;
   lastError?: string;
 }
+
+// Track performance per sport
+export interface SportSourceStats {
+  successCount: number;
+  failureCount: number;
+  consecutiveFailures: number;
+  lastSuccess: Date | null;
+  lastFailure: Date | null;
+}

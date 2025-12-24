@@ -10,7 +10,7 @@
  */
 
 import type { Page } from 'playwright';
-import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult } from './types.js';
+import type { OddsSource, NormalizedOdds, SourceUsage, OddsSourceResult, SportSourceStats } from './types.js';
 import { oddsPortalSource } from './oddsportal.js';
 import { bmBetsSource } from './bmbets.js';
 import { nicerOddsSource } from './nicerodds.js';
@@ -28,8 +28,11 @@ export const allSources: OddsSource[] = [
   nicerOddsSource,
 ];
 
-// Track source usage
+// Track source usage (global)
 const sourceUsage: Map<string, SourceUsage> = new Map();
+
+// Track sport-specific performance: Map<sourceName, Map<sportSlug, SportSourceStats>>
+const sportSourceStats: Map<string, Map<string, SportSourceStats>> = new Map();
 
 // Initialize usage tracking
 for (const source of allSources) {
@@ -40,6 +43,7 @@ for (const source of allSources) {
     consecutiveFailures: 0,
     lastError: undefined,
   });
+  sportSourceStats.set(source.config.name, new Map());
 }
 
 /**
@@ -135,9 +139,49 @@ export function getBestSource(): OddsSource | null {
 }
 
 /**
- * Record successful scrape
+ * Get or create sport stats for a source
  */
-export function recordSuccess(sourceName: string): void {
+function getSportStats(sourceName: string, sportSlug: string): SportSourceStats {
+  const sourceStats = sportSourceStats.get(sourceName);
+  if (!sourceStats) {
+    const newStats: SportSourceStats = {
+      successCount: 0,
+      failureCount: 0,
+      consecutiveFailures: 0,
+      lastSuccess: null,
+      lastFailure: null,
+    };
+    sportSourceStats.set(sourceName, new Map([[sportSlug, newStats]]));
+    return newStats;
+  }
+
+  let stats = sourceStats.get(sportSlug);
+  if (!stats) {
+    stats = {
+      successCount: 0,
+      failureCount: 0,
+      consecutiveFailures: 0,
+      lastSuccess: null,
+      lastFailure: null,
+    };
+    sourceStats.set(sportSlug, stats);
+  }
+  return stats;
+}
+
+/**
+ * Check if a source should be avoided for a specific sport
+ * Avoids sources with 3+ consecutive failures for that sport
+ */
+export function shouldAvoidSourceForSport(sourceName: string, sportSlug: string): boolean {
+  const stats = getSportStats(sourceName, sportSlug);
+  return stats.consecutiveFailures >= 3;
+}
+
+/**
+ * Record successful scrape (with sport tracking)
+ */
+export function recordSuccess(sourceName: string, sportSlug?: string): void {
   const usage = sourceUsage.get(sourceName);
   if (usage) {
     usage.lastUsed = new Date();
@@ -146,14 +190,22 @@ export function recordSuccess(sourceName: string): void {
     usage.lastError = undefined;
   }
 
+  // Track sport-specific success
+  if (sportSlug) {
+    const stats = getSportStats(sourceName, sportSlug);
+    stats.successCount++;
+    stats.consecutiveFailures = 0;
+    stats.lastSuccess = new Date();
+  }
+
   getRateLimitDetector().recordSuccess(getSourceDomain(sourceName));
-  logger.info(`Source ${sourceName} succeeded (total: ${usage?.successCount})`);
+  logger.info(`Source ${sourceName} succeeded${sportSlug ? ` for ${sportSlug}` : ''} (total: ${usage?.successCount})`);
 }
 
 /**
- * Record failed scrape
+ * Record failed scrape (with sport tracking)
  */
-export function recordFailure(sourceName: string, error: string): void {
+export function recordFailure(sourceName: string, error: string, sportSlug?: string): void {
   const usage = sourceUsage.get(sourceName);
   if (usage) {
     usage.lastUsed = new Date();
@@ -162,8 +214,20 @@ export function recordFailure(sourceName: string, error: string): void {
     usage.lastError = error;
   }
 
+  // Track sport-specific failure
+  if (sportSlug) {
+    const stats = getSportStats(sourceName, sportSlug);
+    stats.failureCount++;
+    stats.consecutiveFailures++;
+    stats.lastFailure = new Date();
+
+    if (stats.consecutiveFailures >= 3) {
+      logger.warn(`Source ${sourceName} has ${stats.consecutiveFailures} consecutive failures for ${sportSlug} - will be avoided`);
+    }
+  }
+
   getRateLimitDetector().recordFailure(getSourceDomain(sourceName));
-  logger.warn(`Source ${sourceName} failed (consecutive: ${usage?.consecutiveFailures})`, { error });
+  logger.warn(`Source ${sourceName} failed${sportSlug ? ` for ${sportSlug}` : ''} (consecutive: ${usage?.consecutiveFailures})`, { error });
 }
 
 /**
@@ -199,25 +263,42 @@ export async function scrapeWithRotation(
 
   for (let i = 0; i < maxSources; i++) {
     // Get best available source that we haven't tried
+    // Filter out sources that have 3+ consecutive failures for this sport
     const available = getEnabledSources().filter(
-      (s) => !triedSources.has(s.config.name) && !isOnCooldown(s)
+      (s) =>
+        !triedSources.has(s.config.name) &&
+        !isOnCooldown(s) &&
+        !shouldAvoidSourceForSport(s.config.name, sportSlug)
     );
 
-    if (available.length === 0) break;
+    if (available.length === 0) {
+      // If all sources are avoided for this sport, try any available source as fallback
+      const fallback = getEnabledSources().filter(
+        (s) => !triedSources.has(s.config.name) && !isOnCooldown(s)
+      );
+      if (fallback.length === 0) break;
+      logger.info(`All preferred sources avoided for ${sportSlug}, using fallback`);
+    }
 
-    // Score and pick best
-    const source = available[0]!;
+    // Score and pick best from available (or fallback)
+    const pool = available.length > 0 ? available : getEnabledSources().filter(
+      (s) => !triedSources.has(s.config.name) && !isOnCooldown(s)
+    );
+    if (pool.length === 0) break;
+
+    const source = pool[0]!;
     triedSources.add(source.config.name);
 
     const startTime = Date.now();
-    logger.info(`Trying source: ${source.config.name} for ${sportSlug}`);
+    const avoided = shouldAvoidSourceForSport(source.config.name, sportSlug);
+    logger.info(`Trying source: ${source.config.name} for ${sportSlug}${avoided ? ' (fallback - normally avoided)' : ''}`);
 
     try {
       const odds = await source.scrape(page, sportSlug);
       const duration = Date.now() - startTime;
 
       if (odds.length > 0) {
-        recordSuccess(source.config.name);
+        recordSuccess(source.config.name, sportSlug);
         results.push({
           source: source.config.name,
           odds,
@@ -229,7 +310,7 @@ export async function scrapeWithRotation(
         // If we got good results, we can stop
         if (odds.length >= 10) break;
       } else {
-        recordFailure(source.config.name, 'No odds returned');
+        recordFailure(source.config.name, 'No odds returned', sportSlug);
         results.push({
           source: source.config.name,
           odds: [],
@@ -242,7 +323,7 @@ export async function scrapeWithRotation(
       const duration = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      recordFailure(source.config.name, errorMessage);
+      recordFailure(source.config.name, errorMessage, sportSlug);
       results.push({
         source: source.config.name,
         odds: [],
@@ -257,7 +338,7 @@ export async function scrapeWithRotation(
 }
 
 /**
- * Get status of all sources
+ * Get status of all sources including sport-specific performance
  */
 export function getSourcesStatus(): Record<string, {
   enabled: boolean;
@@ -265,12 +346,15 @@ export function getSourcesStatus(): Record<string, {
   onCooldown: boolean;
   cooldownRemaining?: number;
   usage: SourceUsage;
+  sportStats: Record<string, SportSourceStats>;
+  avoidedSports: string[];
 }> {
   const status: Record<string, any> = {};
 
   for (const source of allSources) {
     const usage = sourceUsage.get(source.config.name)!;
     const onCooldown = isOnCooldown(source);
+    const sportStats = sportSourceStats.get(source.config.name);
 
     let cooldownRemaining: number | undefined;
     if (onCooldown && usage.lastUsed) {
@@ -281,12 +365,27 @@ export function getSourcesStatus(): Record<string, {
       cooldownRemaining = Math.max(0, adjustedCooldown - elapsed);
     }
 
+    // Get sport-specific stats and list of avoided sports
+    const sportStatsObj: Record<string, SportSourceStats> = {};
+    const avoidedSports: string[] = [];
+
+    if (sportStats) {
+      for (const [sport, stats] of sportStats) {
+        sportStatsObj[sport] = { ...stats };
+        if (stats.consecutiveFailures >= 3) {
+          avoidedSports.push(sport);
+        }
+      }
+    }
+
     status[source.config.name] = {
       enabled: source.config.enabled,
       priority: source.config.priority,
       onCooldown,
       cooldownRemaining,
       usage: { ...usage },
+      sportStats: sportStatsObj,
+      avoidedSports,
     };
   }
 

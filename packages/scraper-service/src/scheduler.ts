@@ -62,40 +62,92 @@ let nextOddsSyncTime: Date | null = null;
 let oddsSyncTimeout: NodeJS.Timeout | null = null;
 
 /**
- * Check if there are any upcoming events in the next 24 hours
+ * Check upcoming events and return urgency level
+ * Returns: 'imminent' (0-2h), 'soon' (2-6h), 'later' (6-24h), 'none' (no events)
  */
-async function hasUpcomingEvents(): Promise<boolean> {
+async function getEventUrgency(): Promise<'imminent' | 'soon' | 'later' | 'none'> {
   try {
     const db = getDb();
     const now = new Date();
+    const twoHours = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const sixHours = new Date(now.getTime() + 6 * 60 * 60 * 1000);
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    const upcoming = await db.query.events.findFirst({
+    // Check for imminent events (next 2 hours)
+    const imminent = await db.query.events.findFirst({
       where: and(
         sql`${events.status}::text = 'scheduled'`,
         gte(events.startTime, now),
+        lte(events.startTime, twoHours)
+      ),
+    });
+
+    if (imminent) return 'imminent';
+
+    // Check for events in next 2-6 hours
+    const soon = await db.query.events.findFirst({
+      where: and(
+        sql`${events.status}::text = 'scheduled'`,
+        gte(events.startTime, twoHours),
+        lte(events.startTime, sixHours)
+      ),
+    });
+
+    if (soon) return 'soon';
+
+    // Check for events in next 6-24 hours
+    const later = await db.query.events.findFirst({
+      where: and(
+        sql`${events.status}::text = 'scheduled'`,
+        gte(events.startTime, sixHours),
         lte(events.startTime, tomorrow)
       ),
     });
 
-    return !!upcoming;
+    if (later) return 'later';
+
+    return 'none';
   } catch (error) {
-    logger.warn('Failed to check upcoming events, assuming there are some', { error });
-    return true; // Fail-safe: assume there are events
+    logger.warn('Failed to check upcoming events, assuming imminent', { error });
+    return 'imminent'; // Fail-safe: assume urgent
   }
 }
 
 /**
- * Calculate weighted random delay based on time of day
- * Off-peak hours (midnight-6am, 10pm-midnight) get longer delays
- * Peak hours (6am-10pm) get shorter delays
+ * Calculate weighted random delay based on:
+ * - Event urgency (imminent/soon/later/none)
+ * - Time of day (off-peak = longer delays)
+ * - Multi-source load distribution
  */
-function getSmartDelay(): number {
+function getSmartDelay(urgency: 'imminent' | 'soon' | 'later' | 'none'): number {
   const hour = new Date().getHours();
 
-  // Base delay: 90-150 minutes (1.5-2.5 hours)
-  const minDelay = 90 * 60 * 1000;  // 1.5 hours
-  const maxDelay = 150 * 60 * 1000; // 2.5 hours
+  // Base delays by urgency (with 4 sources, we can be slightly more frequent)
+  // Imminent (0-2h): 45-75 min - need fresh odds
+  // Soon (2-6h): 60-90 min - moderate freshness
+  // Later (6-24h): 90-150 min - original timing
+  // None: 4-6 hours - just check periodically
+  let minDelay: number;
+  let maxDelay: number;
+
+  switch (urgency) {
+    case 'imminent':
+      minDelay = 45 * 60 * 1000;  // 45 min
+      maxDelay = 75 * 60 * 1000;  // 1h 15min
+      break;
+    case 'soon':
+      minDelay = 60 * 60 * 1000;  // 1 hour
+      maxDelay = 90 * 60 * 1000;  // 1.5 hours
+      break;
+    case 'later':
+      minDelay = 90 * 60 * 1000;  // 1.5 hours
+      maxDelay = 150 * 60 * 1000; // 2.5 hours
+      break;
+    case 'none':
+      minDelay = 240 * 60 * 1000; // 4 hours
+      maxDelay = 360 * 60 * 1000; // 6 hours
+      break;
+  }
 
   // Off-peak multiplier (longer delays at night = less suspicious)
   let multiplier = 1.0;
@@ -117,25 +169,43 @@ function getSmartDelay(): number {
   // Add extra jitter (±10 minutes)
   const jitter = (Math.random() - 0.5) * 20 * 60 * 1000;
 
-  return Math.max(60 * 60 * 1000, delay + jitter); // Minimum 1 hour
+  // Minimum delay based on urgency
+  const minimums: Record<string, number> = {
+    imminent: 30 * 60 * 1000, // 30 min
+    soon: 45 * 60 * 1000,     // 45 min
+    later: 60 * 60 * 1000,    // 1 hour
+    none: 180 * 60 * 1000,    // 3 hours
+  };
+
+  return Math.max(minimums[urgency] || 60 * 60 * 1000, delay + jitter);
 }
 
 /**
- * Schedule next odds sync with smart timing
+ * Schedule next odds sync with smart timing based on event urgency
  */
-function scheduleNextOddsSync(): void {
+async function scheduleNextOddsSync(): Promise<void> {
   if (!CRON_ENABLED || !syncOdds) return;
 
-  const delay = getSmartDelay();
+  // Check event urgency to determine timing
+  const urgency = await getEventUrgency();
+  const delay = getSmartDelay(urgency);
   nextOddsSyncTime = new Date(Date.now() + delay);
 
-  logger.info(`Next odds sync scheduled for ${nextOddsSyncTime.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
+  const urgencyLabels = {
+    imminent: 'events in 0-2h',
+    soon: 'events in 2-6h',
+    later: 'events in 6-24h',
+    none: 'no events in 24h',
+  };
+
+  logger.info(`Next odds sync: ${nextOddsSyncTime.toISOString()} (in ${Math.round(delay / 60000)}min) - ${urgencyLabels[urgency]}`);
 
   oddsSyncTimeout = setTimeout(async () => {
     try {
-      // Check if there are upcoming events first
-      const hasEvents = await hasUpcomingEvents();
-      if (!hasEvents) {
+      // Re-check urgency before running
+      const currentUrgency = await getEventUrgency();
+
+      if (currentUrgency === 'none') {
         logger.info('No upcoming events in next 24h, skipping odds sync');
         scheduleNextOddsSync(); // Schedule next check
         return;
@@ -282,7 +352,7 @@ export function startScheduler(): void {
 
   // Start smart odds scheduling (separate from cron)
   if (CRON_ENABLED) {
-    logger.info('Starting smart odds scheduler (variable 1.5-2.5h intervals, off-peak weighted)');
+    logger.info('Starting smart odds scheduler (urgency-based: 45min-6h, off-peak weighted)');
     // Initialize sync-odds status
     jobStatuses.set('sync-odds', {
       name: 'sync-odds',
@@ -293,7 +363,10 @@ export function startScheduler(): void {
       runCount: 0,
       failCount: 0,
     });
-    scheduleNextOddsSync();
+    // Start async scheduling (don't await - it's fire-and-forget)
+    scheduleNextOddsSync().catch((error) => {
+      logger.error('Failed to start smart odds scheduler', { error });
+    });
   } else {
     logger.info('Smart odds scheduler disabled (ENABLE_CRON=false)');
   }
