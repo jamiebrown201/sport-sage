@@ -120,6 +120,7 @@ export class ScraperStack extends cdk.Stack {
       ruleName: `sport-sage-${config.environment}-sync-fixtures`,
       schedule: events.Schedule.rate(cdk.Duration.hours(24)),
       targets: [new targets.LambdaFunction(syncFixturesHandler)],
+      enabled: false, // Disabled - using VPS scraper instead
     });
 
     // Sync Live Scores - every minute (will exit early if no live events)
@@ -142,6 +143,7 @@ export class ScraperStack extends cdk.Stack {
       ruleName: `sport-sage-${config.environment}-sync-live-scores`,
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(syncLiveScoresHandler)],
+      enabled: false, // Disabled - using VPS scraper instead
     });
 
     // Transition Events - every minute (marks scheduled events as live when start time passes)
@@ -167,6 +169,7 @@ export class ScraperStack extends cdk.Stack {
       ruleName: `sport-sage-${config.environment}-transition-events`,
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       targets: [new targets.LambdaFunction(transitionEventsHandler)],
+      enabled: false, // Disabled - using VPS scraper instead
     });
 
     // Sync Odds - every 15 minutes
@@ -185,6 +188,7 @@ export class ScraperStack extends cdk.Stack {
       ruleName: `sport-sage-${config.environment}-sync-odds`,
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(syncOddsHandler)],
+      enabled: false, // Disabled - using VPS scraper instead
     });
 
     // Settlement Processor - triggered by SQS
