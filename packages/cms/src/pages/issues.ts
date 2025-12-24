@@ -13,7 +13,7 @@
 
 import { getDb, events, predictions, teams, teamAliases, scraperRuns, scraperAlerts, markets } from '@sport-sage/database';
 import { desc, eq, sql, count, gte, and, lt, isNull } from 'drizzle-orm';
-import { layout, timeAgo } from '../ui/layout.js';
+import { layout, timeAgo, tooltip } from '../ui/layout.js';
 
 export interface Issue {
   id: string;
@@ -258,7 +258,7 @@ export async function handleIssues(environment: string): Promise<string> {
   const statusIcon = overallStatus === 'critical' ? '!' : overallStatus === 'warning' ? '!' : '✓';
 
   const content = `
-    <h1>Issues</h1>
+    <h1>Issues ${tooltip('<strong>Issue Detection</strong>Automated health checks that run every page load.<br><br><strong>Severity Levels:</strong><ul><li><strong style="color: var(--error);">Critical</strong>: Immediate action needed (stuck events, no activity)</li><li><strong style="color: var(--warning);">Warning</strong>: Should be addressed soon (stale data, failures)</li><li><strong style="color: var(--info);">Info</strong>: Low priority improvements (data quality)</li></ul><br>Page auto-refreshes every 60 seconds.', 'right')}</h1>
 
     <!-- Overall Status -->
     <div class="card" style="border-color: var(--${statusColor}); margin-bottom: 30px;">
@@ -298,8 +298,8 @@ export async function handleIssues(environment: string): Promise<string> {
       <table>
         <thead>
           <tr>
-            <th style="width: 100px;">Severity</th>
-            <th style="width: 120px;">Category</th>
+            <th style="width: 100px;">Severity ${tooltip('<strong>Severity</strong><ul><li><strong>Critical</strong>: User-impacting or system-breaking</li><li><strong>Warning</strong>: Degraded but functional</li><li><strong>Info</strong>: Suggestions for improvement</li></ul>', 'bottom')}</th>
+            <th style="width: 120px;">Category ${tooltip('<strong>Categories</strong><ul><li><strong>Events</strong>: Match status issues</li><li><strong>Predictions</strong>: Bet settlement issues</li><li><strong>Scrapers</strong>: Data collection issues</li><li><strong>Data Quality</strong>: Missing or incomplete data</li><li><strong>Monitoring</strong>: Alert acknowledgements</li></ul>', 'bottom')}</th>
             <th>Issue</th>
             <th style="width: 80px; text-align: center;">Count</th>
             <th style="width: 150px;">Action</th>

@@ -4,7 +4,7 @@
 
 import { getDb, teams, teamAliases } from '@sport-sage/database';
 import { eq, ilike, count, sql, desc, and, isNull } from 'drizzle-orm';
-import { layout } from '../ui/layout.js';
+import { layout, tooltip } from '../ui/layout.js';
 
 const SOURCES = ['flashscore', 'oddschecker', 'sofascore', 'espn', '365scores', 'livescore', 'betexplorer', 'oddsportal', 'manual'];
 
@@ -113,7 +113,7 @@ export async function handleSourceMapping(query: URLSearchParams, environment: s
   `).join('');
 
   const content = `
-    <h1>Source Mapping</h1>
+    <h1>Source Mapping ${tooltip('<strong>Source Mapping</strong>This page manages how team names from different data sources are linked together.<br><br><strong>Why it matters:</strong><br>Flashscore might call a team "Man Utd" while Oddschecker uses "Manchester United". Aliases ensure odds from Oddschecker are matched to the same fixture from Flashscore.<br><br><strong>Auto-learning:</strong><br>The system automatically creates aliases when fuzzy matching finds >85% similarity.', 'right')}</h1>
 
     ${flash ? `<div class="flash flash-success">${flash}</div>` : ''}
 
@@ -125,19 +125,19 @@ export async function handleSourceMapping(query: URLSearchParams, environment: s
     <div class="stats-grid" style="margin-bottom: 30px;">
       <div class="stat">
         <div class="stat-value">${totalTeams?.count || 0}</div>
-        <div class="stat-label">Total Teams</div>
+        <div class="stat-label">Total Teams ${tooltip('<strong>Total Teams</strong>Unique team entities in the database. Each team can have multiple aliases.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--success);">${totalAliases?.count || 0}</div>
-        <div class="stat-label">Total Aliases</div>
+        <div class="stat-label">Total Aliases ${tooltip('<strong>Total Aliases</strong>All source-specific team names mapped to canonical teams. More aliases = better coverage across sources.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--error);">${teamsWithNoAliases[0]?.count || 0}</div>
-        <div class="stat-label">Teams Without Aliases</div>
+        <div class="stat-label">Without Aliases ${tooltip('<strong>Teams Without Aliases</strong>Teams that exist but have no source mappings. These may be orphaned or newly created. Click "Show Unmapped" to review.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value">${SOURCES.length}</div>
-        <div class="stat-label">Supported Sources</div>
+        <div class="stat-label">Supported Sources ${tooltip('<strong>Supported Sources</strong>Data sources the system can scrape: flashscore (fixtures/scores), oddschecker (odds), sofascore, espn, etc.', 'bottom')}</div>
       </div>
     </div>
 
@@ -161,7 +161,7 @@ export async function handleSourceMapping(query: URLSearchParams, environment: s
 
       <!-- Source Breakdown -->
       <div class="card">
-        <h2 style="margin-top: 0;">Aliases by Source</h2>
+        <h2 style="margin-top: 0;">Aliases by Source ${tooltip('<strong>Source Breakdown</strong>How many team aliases exist per data source. High counts indicate good coverage for that source.', 'left')}</h2>
         <table>
           <thead><tr><th>Source</th><th>Aliases</th><th>Actions</th></tr></thead>
           <tbody>${sourceRows || '<tr><td colspan="3" class="empty">No aliases</td></tr>'}</tbody>
@@ -184,7 +184,7 @@ export async function handleSourceMapping(query: URLSearchParams, environment: s
             <tr>
               <th>Team Name</th>
               <th>Short Name</th>
-              <th>Source Coverage</th>
+              <th>Source Coverage ${tooltip('<strong>Source Coverage</strong>Shows which sources have aliases for this team.<br><br><strong>Green badge</strong>: Alias exists for this source<br><strong>Red badge</strong>: No alias yet<br><br>Hover over badges to see the actual alias text.', 'bottom')}</th>
               <th>Aliases</th>
               <th>Actions</th>
             </tr>
@@ -197,7 +197,7 @@ export async function handleSourceMapping(query: URLSearchParams, environment: s
 
     <!-- Quick Actions -->
     <div class="card" style="margin-top: 20px;">
-      <h2 style="margin-top: 0;">Import Aliases</h2>
+      <h2 style="margin-top: 0;">Import Aliases ${tooltip('<strong>Bulk Import</strong>Add multiple aliases at once using CSV format.<br><br><strong>Format:</strong><br><code>team_name,alias,source</code><br><br><strong>Example:</strong><br>Manchester United,Man Utd,flashscore<br>Manchester United,Man United,oddschecker<br><br>Team names must match existing teams exactly (case-insensitive).', 'right')}</h2>
       <p style="color: var(--text-muted); margin-bottom: 15px;">
         Add aliases in bulk by importing from a CSV file. Format: team_name,alias,source
       </p>

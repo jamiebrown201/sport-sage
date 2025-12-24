@@ -2,7 +2,7 @@
  * Scraper Page - Live status from Hetzner scraper service
  */
 
-import { layout, timeAgo, formatDuration } from '../ui/layout.js';
+import { layout, timeAgo, formatDuration, tooltip } from '../ui/layout.js';
 
 const SCRAPER_URL = process.env.SCRAPER_SERVICE_URL || 'http://77.42.42.185:3001';
 
@@ -91,19 +91,19 @@ export async function handleScraper(environment: string, flash?: string): Promis
     <div class="stats-grid" style="margin-bottom: 30px;">
       <div class="stat">
         <div class="stat-value">${health.browserPool.activeContexts + health.browserPool.idleContexts}/${health.browserPool.maxContexts}</div>
-        <div class="stat-label">Browser Contexts</div>
+        <div class="stat-label">Browsers ${tooltip('<strong>Browser Pool</strong>Playwright browser contexts used for scraping. Active = currently scraping, Idle = available. Max 5 concurrent.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--success);">${health.metrics.successRate}</div>
-        <div class="stat-label">Success Rate</div>
+        <div class="stat-label">Success Rate ${tooltip('<strong>Success Rate</strong>Percentage of scrape attempts that completed without errors. Target: >90%', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: ${parseFloat(health.metrics.blockedRate) > 10 ? 'var(--error)' : 'var(--text-muted)'};">${health.metrics.blockedRate}</div>
-        <div class="stat-label">Blocked Rate</div>
+        <div class="stat-label">Blocked ${tooltip('<strong>Block Rate</strong>Percentage of requests blocked by anti-bot measures. High rates trigger source cooldowns.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value">${health.metrics.avgResponseTime}</div>
-        <div class="stat-label">Avg Response</div>
+        <div class="stat-label">Avg Response ${tooltip('<strong>Average Response Time</strong>Mean time for scrape requests to complete. Higher times may indicate rate limiting.', 'bottom')}</div>
       </div>
     </div>
   ` : '';
@@ -173,18 +173,18 @@ export async function handleScraper(environment: string, flash?: string): Promis
   const flashHtml = flash ? `<div class="flash flash-success">${flash}</div>` : '';
 
   const content = `
-    <h1>Scraper Service</h1>
+    <h1>Scraper Service ${tooltip('<strong>Hetzner Scraper</strong>Node.js service running on a Hetzner VPS (77.42.42.185:3001).<br><br><strong>Architecture:</strong><ul><li>Playwright browser pool for web scraping</li><li>Cron-based job scheduler</li><li>Round-robin source rotation with cooldowns</li><li>Direct PostgreSQL connection to Aurora</li></ul>', 'right')}</h1>
     ${flashHtml}
     ${healthBanner}
     ${statsHtml}
 
-    <h2>Odds Sources (Round-Robin Rotation)</h2>
+    <h2>Odds Sources (Round-Robin Rotation) ${tooltip('<strong>Source Rotation</strong>Odds are scraped from multiple sources using round-robin with intelligent rotation.<br><br><strong>How it works:</strong><ul><li>Sources rotate by priority within each sport</li><li>Failed sources get temporary cooldowns (8-15 min)</li><li>Sport-specific tracking avoids problematic combinations</li><li>Consecutive failures increase cooldown duration</li></ul><strong>Status meanings:</strong><ul><li>HEALTHY: >70% success rate</li><li>DEGRADED: 30-70% success rate</li><li>FAILING: 3+ consecutive failures</li><li>COOLDOWN: Temporarily resting</li></ul>', 'right')}</h2>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 30px;">
       ${sourcesHtml}
     </div>
 
     <div class="card">
-      <h2 style="margin-top: 0;">Scheduled Jobs</h2>
+      <h2 style="margin-top: 0;">Scheduled Jobs ${tooltip('<strong>Scheduled Jobs</strong>Cron-based jobs that run automatically.<br><br><strong>Jobs:</strong><ul><li><strong>sync-fixtures</strong>: Fetches upcoming matches from Flashscore (every 2h)</li><li><strong>sync-odds</strong>: Scrapes odds from various sources (every 5m)</li><li><strong>sync-live-scores</strong>: Updates live match scores (every 1m)</li><li><strong>transition-events</strong>: Moves events through lifecycle states (every 1m)</li></ul>', 'right')}</h2>
       <table>
         <thead>
           <tr>

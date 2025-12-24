@@ -4,7 +4,7 @@
 
 import { getDb, teams, teamAliases, events } from '@sport-sage/database';
 import { desc, eq, count, ilike, sql } from 'drizzle-orm';
-import { layout, timeAgo } from '../ui/layout.js';
+import { layout, timeAgo, tooltip } from '../ui/layout.js';
 
 export async function handleTeams(query: URLSearchParams, environment: string): Promise<string> {
   const db = getDb();
@@ -43,7 +43,7 @@ export async function handleTeams(query: URLSearchParams, environment: string): 
   `).join('');
 
   const content = `
-    <h1>Teams</h1>
+    <h1>Teams ${tooltip('<strong>Teams Database</strong>Teams are auto-created when fixtures sync from Flashscore. The system uses fuzzy matching (85% confidence threshold) to link variations of the same team name across sources.<br><br><strong>How it works:</strong><ul><li>Each team has a canonical name stored here</li><li>Aliases map source-specific names to the team</li><li>New team names are fuzzy-matched against existing teams</li><li>High-confidence matches auto-create aliases</li></ul>', 'right')}</h1>
 
     ${flash ? `<div class="flash flash-success">${flash}</div>` : ''}
 
@@ -57,7 +57,15 @@ export async function handleTeams(query: URLSearchParams, environment: string): 
         <span style="color: var(--text-muted);">${teamsWithAliases.length} teams found</span>
       </div>
       <table>
-        <thead><tr><th>Name</th><th>Short Name</th><th>Aliases</th><th>Events</th><th>Actions</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Short Name</th>
+            <th>Aliases ${tooltip('<strong>Aliases</strong>Different names the same team is known by across data sources. E.g., "Man Utd" (Flashscore) and "Manchester United" (Oddschecker) both map to the same team.', 'bottom')}</th>
+            <th>Events</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
         <tbody>${rows.length > 0 ? rows : '<tr><td colspan="5" class="empty">No teams found</td></tr>'}</tbody>
       </table>
     </div>
@@ -166,14 +174,14 @@ export async function handleTeamDetail(id: string, environment: string, flash?: 
     <div class="grid-2" style="margin-top: 20px;">
       <!-- Aliases -->
       <div class="card">
-        <h2 style="margin-top: 0;">Aliases (${aliases.length})</h2>
+        <h2 style="margin-top: 0;">Aliases (${aliases.length}) ${tooltip('<strong>Team Aliases</strong>Aliases link source-specific team names to this canonical team record.<br><br><strong>How they work:</strong><ul><li>When a scraper encounters a team name, it first checks aliases</li><li>If an exact match exists for that source, the team is linked</li><li>Otherwise, fuzzy matching creates new aliases automatically</li></ul><strong>Source</strong>: Where this alias came from (flashscore, oddschecker, manual, etc.)', 'right')}</h2>
         <table>
-          <thead><tr><th>Alias</th><th>Source</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Alias</th><th>Source ${tooltip('<strong>Source</strong>The data source this alias was discovered from. Used for exact matching when that source provides data.', 'bottom')}</th><th>Actions</th></tr></thead>
           <tbody>${aliasRows || '<tr><td colspan="3" class="empty">No aliases</td></tr>'}</tbody>
         </table>
 
         <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border);">
-          <h3 style="font-size: 1em; margin-bottom: 10px;">Add New Alias</h3>
+          <h3 style="font-size: 1em; margin-bottom: 10px;">Add New Alias ${tooltip('<strong>Manual Alias</strong>Add an alias manually when the fuzzy matcher didn\'t auto-link correctly. Use this if you notice the same team appearing as separate entries.', 'right')}</h3>
           <form method="POST" action="/teams/${id}/alias/add" style="display: flex; gap: 10px;">
             <input type="text" name="alias" placeholder="Team alias name" style="flex: 1;" required>
             <select name="source" required>

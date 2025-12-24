@@ -4,7 +4,7 @@
 
 import { getDb, predictions, events, users, outcomes, markets } from '@sport-sage/database';
 import { eq, sql, and, desc, isNotNull } from 'drizzle-orm';
-import { layout, timeAgo } from '../ui/layout.js';
+import { layout, timeAgo, tooltip } from '../ui/layout.js';
 
 interface UnsettledPrediction {
   predictionId: string;
@@ -132,7 +132,7 @@ export async function handleBulkSettle(query: URLSearchParams, environment: stri
   `).join('');
 
   const content = `
-    <h1>Bulk Settle Predictions</h1>
+    <h1>Bulk Settle Predictions ${tooltip('<strong>Prediction Settlement</strong>Settles pending predictions for finished events.<br><br><strong>Process:</strong><ol style="margin: 8px 0 0 16px;"><li>Event finishes → status becomes "finished"</li><li>Outcomes marked as winner/loser on event page</li><li>Predictions matched to winning outcomes</li><li>User coins updated (stake × 2 for wins)</li></ol>', 'right')}</h1>
 
     ${flash ? `<div class="flash flash-success">${flash}</div>` : ''}
 
@@ -140,23 +140,23 @@ export async function handleBulkSettle(query: URLSearchParams, environment: stri
     <div class="stats-grid" style="margin-bottom: 30px;">
       <div class="stat">
         <div class="stat-value">${totalPending}</div>
-        <div class="stat-label">Pending Predictions</div>
+        <div class="stat-label">Pending ${tooltip('<strong>Pending Predictions</strong>Total predictions with status "pending" where the event has finished. These are waiting to be settled.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--success);">${canAutoSettle}</div>
-        <div class="stat-label">Can Auto-Settle</div>
+        <div class="stat-label">Auto-Settle ${tooltip('<strong>Can Auto-Settle</strong>Predictions where the outcome isWinner flag is set. These can be settled with one click.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--success);">${willWin}</div>
-        <div class="stat-label">Will Win</div>
+        <div class="stat-label">Will Win ${tooltip('<strong>Winning Predictions</strong>Predictions on outcomes marked as winners. Users will receive stake × 2 payout.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--error);">${willLose}</div>
-        <div class="stat-label">Will Lose</div>
+        <div class="stat-label">Will Lose ${tooltip('<strong>Losing Predictions</strong>Predictions on outcomes marked as losers. Users lose their stake (already deducted at prediction time).', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--warning);">${needsManualReview.length}</div>
-        <div class="stat-label">Need Review</div>
+        <div class="stat-label">Need Review ${tooltip('<strong>Need Manual Review</strong>Predictions where outcomes don\'t have isWinner set. Go to the event page and mark which outcomes won.', 'bottom')}</div>
       </div>
     </div>
 

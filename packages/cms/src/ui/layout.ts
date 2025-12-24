@@ -200,6 +200,105 @@ export function layout(title: string, content: string, environment: string, show
     @media (max-width: 900px) {
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
     }
+
+    /* Tooltips */
+    .tooltip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      cursor: help;
+    }
+    .tooltip .tooltip-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-left: 6px;
+      flex-shrink: 0;
+    }
+    .tooltip .tooltip-icon:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #000;
+    }
+    .tooltip .tooltip-text {
+      visibility: hidden;
+      opacity: 0;
+      position: absolute;
+      z-index: 1000;
+      background: #1a1a2e;
+      color: var(--text);
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-size: 0.85em;
+      line-height: 1.5;
+      min-width: 280px;
+      max-width: 400px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      transition: opacity 0.2s, visibility 0.2s;
+      font-weight: normal;
+      text-align: left;
+    }
+    .tooltip .tooltip-text.tooltip-right {
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .tooltip .tooltip-text.tooltip-bottom {
+      top: calc(100% + 10px);
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .tooltip .tooltip-text.tooltip-top {
+      bottom: calc(100% + 10px);
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .tooltip .tooltip-text.tooltip-left {
+      right: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .tooltip:hover .tooltip-text {
+      visibility: visible;
+      opacity: 1;
+    }
+    .tooltip .tooltip-text strong {
+      color: var(--primary);
+      display: block;
+      margin-bottom: 6px;
+    }
+    .tooltip .tooltip-text code {
+      background: var(--bg-dark);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .tooltip .tooltip-text ul {
+      margin: 8px 0 0 16px;
+      padding: 0;
+    }
+    .tooltip .tooltip-text li {
+      margin: 4px 0;
+    }
+
+    /* Info header with tooltip */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 15px;
+    }
+    .section-header h2 {
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -250,4 +349,26 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${(ms / 60000).toFixed(1)}m`;
+}
+
+/**
+ * Generate a tooltip element
+ * @param content The tooltip text (can include HTML)
+ * @param position Position of tooltip: 'right' | 'bottom' | 'top' | 'left'
+ */
+export function tooltip(content: string, position: 'right' | 'bottom' | 'top' | 'left' = 'right'): string {
+  return `<span class="tooltip">
+    <span class="tooltip-icon">?</span>
+    <span class="tooltip-text tooltip-${position}">${content}</span>
+  </span>`;
+}
+
+/**
+ * Generate a section header with tooltip
+ */
+export function sectionHeader(title: string, tooltipContent: string): string {
+  return `<div class="section-header">
+    <h2 style="margin: 0;">${title}</h2>
+    ${tooltip(tooltipContent, 'right')}
+  </div>`;
 }

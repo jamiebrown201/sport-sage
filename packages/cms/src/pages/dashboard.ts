@@ -4,7 +4,7 @@
 
 import { getDb, events, sports, teams, predictions, scraperRuns } from '@sport-sage/database';
 import { gte, lte, and, count, sql, desc, eq } from 'drizzle-orm';
-import { layout, timeAgo } from '../ui/layout.js';
+import { layout, timeAgo, tooltip } from '../ui/layout.js';
 import { getIssuesWidget } from './issues.js';
 
 export async function handleDashboard(environment: string): Promise<string> {
@@ -157,6 +157,7 @@ export async function handleDashboard(environment: string): Promise<string> {
           <span style="font-weight: 500; color: ${scraperHealthy ? 'var(--success)' : recentRuns.length === 0 ? 'var(--text-muted)' : 'var(--warning)'};">
             ${scraperHealthy ? 'Scrapers Healthy' : recentRuns.length === 0 ? 'No Recent Activity' : 'Scraper Issues'}
           </span>
+          ${tooltip('<strong>System Health</strong>Healthy = 80%+ success rate in last hour.<br><br><strong>Job Types:</strong><ul><li>sync-fixtures: Fetches upcoming matches (every 2h)</li><li>sync-odds: Scrapes odds from multiple sources (every 5m)</li><li>sync-live-scores: Updates live match scores (every 1m)</li><li>transition-events: Moves scheduled→live→finished (every 1m)</li></ul>', 'right')}
           <span style="color: var(--text-muted); margin-left: 15px; font-size: 0.9em;">
             ${recentRuns.length} runs in last hour (${successfulRuns} success, ${failedRuns} failed)
           </span>
@@ -169,27 +170,27 @@ export async function handleDashboard(environment: string): Promise<string> {
     <div class="stats-grid">
       <div class="stat">
         <div class="stat-value">${scheduledEvents?.count || 0}</div>
-        <div class="stat-label">Scheduled</div>
+        <div class="stat-label">Scheduled ${tooltip('<strong>Scheduled Events</strong>Events with status "scheduled" and start_time in the future. These are upcoming matches waiting to begin.', 'bottom')}</div>
       </div>
       <div class="stat" style="background: ${(liveEvents?.count || 0) > 0 ? '#4d3d0d' : 'var(--bg-hover)'}; border: 1px solid ${(liveEvents?.count || 0) > 0 ? 'var(--warning)40' : 'transparent'};">
         <div class="stat-value" style="color: var(--warning);">${liveEvents?.count || 0}</div>
-        <div class="stat-label">Live Now</div>
+        <div class="stat-label">Live Now ${tooltip('<strong>Live Events</strong>Events with status "live". The scraper updates these every 60 seconds via the sync-live-scores job.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--success);">${finishedEvents?.count || 0}</div>
-        <div class="stat-label">Finished</div>
+        <div class="stat-label">Finished ${tooltip('<strong>Finished Events</strong>Events with status "finished". Final scores are stored in home_score and away_score columns.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value">${totalTeams?.count || 0}</div>
-        <div class="stat-label">Teams</div>
+        <div class="stat-label">Teams ${tooltip('<strong>Teams Database</strong>Teams are auto-created when fixtures sync. Each team has aliases per source (e.g., "Man Utd" from flashscore, "Manchester United" from oddschecker). Fuzzy matching at 85% confidence auto-links variations.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value">${totalPredictions?.count || 0}</div>
-        <div class="stat-label">Predictions</div>
+        <div class="stat-label">Predictions ${tooltip('<strong>All Predictions</strong>Total user predictions across all events. Includes pending, won, lost, and void outcomes.', 'bottom')}</div>
       </div>
       <div class="stat">
         <div class="stat-value" style="color: var(--info);">${pendingPredictions?.count || 0}</div>
-        <div class="stat-label">Pending Bets</div>
+        <div class="stat-label">Pending Bets ${tooltip('<strong>Pending Predictions</strong>Predictions awaiting settlement. These need the associated event to finish, then can be settled via the Bulk Settle page.', 'bottom')}</div>
       </div>
     </div>
 
@@ -197,7 +198,7 @@ export async function handleDashboard(environment: string): Promise<string> {
       <!-- Live Events -->
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <h2 style="margin: 0;">Live Events</h2>
+          <h2 style="margin: 0;">Live Events ${tooltip('<strong>Live Events</strong>Shows current in-play matches with live scores. Updated every 60 seconds by the sync-live-scores job.<br><br><strong>Period</strong>: Current game period (1H, 2H, HT, etc.)<br><strong>Score</strong>: Real-time score from Flashscore', 'right')}</h2>
           <a href="/live-scores" style="font-size: 0.85em;">View All &rarr;</a>
         </div>
         <table style="margin-top: 15px;">
@@ -209,7 +210,7 @@ export async function handleDashboard(environment: string): Promise<string> {
       <!-- Recent Scraper Runs -->
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <h2 style="margin: 0;">Recent Scraper Activity</h2>
+          <h2 style="margin: 0;">Recent Scraper Activity ${tooltip('<strong>Scraper Runs</strong>Each job execution is logged with status.<br><br><strong>Sources:</strong><ul><li>flashscore: Fixtures & live scores</li><li>oddschecker: Odds comparison</li><li>betfair/bet365: Direct odds</li></ul><strong>Statuses:</strong><ul><li>success: Completed normally</li><li>failed: Error occurred (check logs)</li></ul>', 'left')}</h2>
           <a href="/monitoring" style="font-size: 0.85em;">View All &rarr;</a>
         </div>
         <table style="margin-top: 15px;">
@@ -221,7 +222,7 @@ export async function handleDashboard(environment: string): Promise<string> {
 
     <div class="grid-2">
       <div class="card">
-        <h2 style="margin-top: 0;">Fixtures by Sport (Next 7 Days)</h2>
+        <h2 style="margin-top: 0;">Fixtures by Sport (Next 7 Days) ${tooltip('<strong>Upcoming Fixtures</strong>Count of scheduled events per sport for the next 7 days. Only shows active sports with at least one event.', 'right')}</h2>
         <table>
           <thead><tr><th>Sport</th><th>Count</th></tr></thead>
           <tbody>${sportRows || '<tr><td colspan="2" class="empty">No sports found</td></tr>'}</tbody>
@@ -229,7 +230,7 @@ export async function handleDashboard(environment: string): Promise<string> {
       </div>
 
       <div class="card">
-        <h2 style="margin-top: 0;">Today's Matches</h2>
+        <h2 style="margin-top: 0;">Today's Matches ${tooltip('<strong>Today\'s Schedule</strong>All events starting today (00:00 to 23:59 local time), regardless of status.', 'left')}</h2>
         <table>
           <thead><tr><th>Time</th><th>Match</th><th>Competition</th><th>Status</th></tr></thead>
           <tbody>${todayRows}</tbody>
@@ -238,7 +239,7 @@ export async function handleDashboard(environment: string): Promise<string> {
     </div>
 
     <div class="card">
-      <h2 style="margin-top: 0;">Quick Actions</h2>
+      <h2 style="margin-top: 0;">Quick Actions ${tooltip('<strong>Quick Actions</strong>Manual triggers for scraper jobs. Useful for testing or forcing immediate data refresh.<br><br><strong>Warning:</strong> Triggering too frequently may cause rate limiting from data sources.', 'right')}</h2>
       <div style="display: flex; gap: 15px; flex-wrap: wrap;">
         <a href="/live-scores" class="btn">Live Scores</a>
         <a href="/predictions" class="btn">Predictions</a>
