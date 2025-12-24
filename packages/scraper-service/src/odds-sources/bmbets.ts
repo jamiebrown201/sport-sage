@@ -69,6 +69,10 @@ async function scrapeBMBets(page: Page, sportSlug: string): Promise<NormalizedOd
         break;
       }
     } catch (error) {
+      // Re-throw BotBlockedError and NoDataAvailableError so rotation logic can handle them
+      if (error instanceof BotBlockedError || error instanceof NoDataAvailableError) {
+        throw error;
+      }
       logger.warn(`Failed to scrape URL: ${url}`, { error });
     }
 
