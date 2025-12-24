@@ -39,6 +39,8 @@ import { handleIssues } from './pages/issues.js';
 import { handleSports, handleSportDetail, updateSport, toggleSportActive } from './pages/sports.js';
 import { handleBulkSettle, executeBulkSettle } from './pages/bulk-settle.js';
 import { handleSourceMapping, importAliases } from './pages/source-mapping.js';
+import { handleReviewQueue, approveEvent, rejectEvent, approveAllEvents } from './pages/review-queue.js';
+import { handleSettlementQueue, releasePrediction, voidPrediction, releaseAllPredictions } from './pages/settlement-queue.js';
 import { checkDatabaseConfig } from './utils/db-config.js';
 
 const PORT = process.env.PORT || 3333;
@@ -255,6 +257,58 @@ const server = http.createServer(async (req, res) => {
       res.end();
       return;
     }
+
+    // Review queue: approve event
+    if (path.match(/^\/review-queue\/[^/]+\/approve$/)) {
+      const eventId = path.split('/')[2]!;
+      const result = await approveEvent(eventId);
+      res.writeHead(302, { Location: `/review-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
+
+    // Review queue: reject event
+    if (path.match(/^\/review-queue\/[^/]+\/reject$/)) {
+      const eventId = path.split('/')[2]!;
+      const result = await rejectEvent(eventId);
+      res.writeHead(302, { Location: `/review-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
+
+    // Review queue: approve all
+    if (path === '/review-queue/approve-all') {
+      const result = await approveAllEvents();
+      res.writeHead(302, { Location: `/review-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
+
+    // Settlement queue: release prediction
+    if (path.match(/^\/settlement-queue\/[^/]+\/release$/)) {
+      const predictionId = path.split('/')[2]!;
+      const result = await releasePrediction(predictionId);
+      res.writeHead(302, { Location: `/settlement-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
+
+    // Settlement queue: void prediction
+    if (path.match(/^\/settlement-queue\/[^/]+\/void$/)) {
+      const predictionId = path.split('/')[2]!;
+      const result = await voidPrediction(predictionId);
+      res.writeHead(302, { Location: `/settlement-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
+
+    // Settlement queue: release all
+    if (path === '/settlement-queue/release-all') {
+      const result = await releaseAllPredictions();
+      res.writeHead(302, { Location: `/settlement-queue?flash=${encodeURIComponent(result.message)}` });
+      res.end();
+      return;
+    }
   }
 
   // Lambda trigger via GET (convenience)
@@ -430,6 +484,14 @@ pnpm --filter @sport-sage/cms start</pre>
 
       case path === '/source-mapping':
         body = await handleSourceMapping(query, ENVIRONMENT);
+        break;
+
+      case path === '/review-queue':
+        body = await handleReviewQueue(query, ENVIRONMENT);
+        break;
+
+      case path === '/settlement-queue':
+        body = await handleSettlementQueue(query, ENVIRONMENT);
         break;
 
       default:

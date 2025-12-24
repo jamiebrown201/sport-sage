@@ -322,7 +322,10 @@ export function layout(title: string, content: string, environment: string, show
     <a href="/logs">Logs</a>
     <a href="/analytics">Analytics</a>
     <span class="divider"></span>
+    <a href="/review-queue">Review</a>
+    <a href="/settlement-queue">Holds</a>
     <a href="/bulk-settle">Settle</a>
+    <span class="divider"></span>
     <a href="/source-mapping">Mapping</a>
     <a href="/lambdas">Lambdas</a>
     <a href="/query">SQL</a>

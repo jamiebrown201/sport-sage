@@ -7,6 +7,7 @@ import {
   timestamp,
   pgEnum,
   index,
+  text,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './users.js';
@@ -49,6 +50,14 @@ export const predictions = pgTable(
     settledCoins: integer('settled_coins'),
     settledStars: integer('settled_stars'),
     settledAt: timestamp('settled_at', { withTimezone: true }),
+
+    // Settlement safeguards: hold suspicious payouts for review
+    isHeld: boolean('is_held').notNull().default(false),
+    holdReason: text('hold_reason'),
+    heldAt: timestamp('held_at', { withTimezone: true }),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -57,6 +66,8 @@ export const predictions = pgTable(
     index('predictions_event_id_idx').on(table.eventId),
     index('predictions_status_idx').on(table.status),
     index('predictions_created_at_idx').on(table.createdAt),
+    // Index for finding held predictions
+    index('predictions_held_idx').on(table.isHeld),
   ]
 );
 
@@ -104,6 +115,11 @@ export const predictionsRelations = relations(predictions, ({ one, many }) => ({
   outcome: one(outcomes, {
     fields: [predictions.outcomeId],
     references: [outcomes.id],
+  }),
+  reviewer: one(users, {
+    fields: [predictions.reviewedBy],
+    references: [users.id],
+    relationName: 'predictionReviewer',
   }),
   selections: many(accumulatorSelections),
 }));

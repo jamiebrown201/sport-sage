@@ -3,6 +3,8 @@
  *
  * Scrapes odds from multiple sources with intelligent rotation.
  * Sources: OddsPortal, BMBets, Odds Scanner, Nicer Odds, the-odds-api (fallback)
+ *
+ * Includes anomaly detection to flag suspicious odds before users can bet.
  */
 
 import { events, markets, outcomes } from '@sport-sage/database';
@@ -21,6 +23,7 @@ import {
   stringSimilarity,
   type NormalizedOdds,
 } from '../odds-sources/index.js';
+import { validateAndProcessOdds } from '../validation/odds-anomaly.js';
 
 const logger = createJobLogger('sync-odds');
 
@@ -147,8 +150,10 @@ export async function runSyncOdds(): Promise<void> {
         const matched = matchEventToOdds(evt, mergedOdds);
 
         if (matched) {
-          await updateEventOdds(db, evt, matched);
-          totalUpdated++;
+          const updated = await updateEventOdds(db, evt, matched);
+          if (updated) {
+            totalUpdated++;
+          }
         }
       }
 
@@ -300,15 +305,54 @@ function matchEventToOdds(event: any, scrapedOdds: NormalizedOdds[]): Normalized
 
 // normalizeTeamName, stringSimilarity, levenshteinDistance moved to odds-sources/utils.ts
 
-async function updateEventOdds(db: any, event: any, odds: NormalizedOdds): Promise<void> {
+async function updateEventOdds(db: any, event: any, odds: NormalizedOdds): Promise<boolean> {
   const mainMarket = event.markets.find((m: any) => m.type === 'match_winner');
 
   if (!mainMarket) {
     logger.debug('No match_winner market found', { eventId: event.id });
-    return;
+    return false;
   }
 
-  // Update market with odds
+  // Skip if event is already flagged (don't update odds on flagged events)
+  if (event.isFlagged) {
+    logger.debug('Skipping flagged event', { eventId: event.id });
+    return false;
+  }
+
+  // Get previous odds for anomaly detection
+  const homeOutcome = mainMarket.outcomes.find((o: any) => o.name.toLowerCase() === 'home win');
+  const drawOutcome = mainMarket.outcomes.find((o: any) => o.name.toLowerCase() === 'draw');
+  const awayOutcome = mainMarket.outcomes.find((o: any) => o.name.toLowerCase() === 'away win');
+
+  const previousOdds = (homeOutcome || awayOutcome) ? {
+    homeWin: homeOutcome ? parseFloat(homeOutcome.odds) : undefined,
+    draw: drawOutcome ? parseFloat(drawOutcome.odds) : undefined,
+    awayWin: awayOutcome ? parseFloat(awayOutcome.odds) : undefined,
+    updatedAt: homeOutcome?.updatedAt || new Date(),
+  } : null;
+
+  // Validate odds and check for anomalies
+  const validation = await validateAndProcessOdds(
+    event.id,
+    {
+      homeWin: odds.homeWin,
+      draw: odds.draw,
+      awayWin: odds.awayWin,
+      source: odds.source,
+    },
+    previousOdds
+  );
+
+  // If validation failed (critical anomaly), don't apply odds
+  if (!validation.valid) {
+    logger.warn('Odds rejected due to critical anomaly', {
+      eventId: event.id,
+      flagged: validation.flagged,
+    });
+    return false;
+  }
+
+  // Apply odds (event may be flagged but odds are still applied for non-critical)
   if (odds.homeWin !== undefined || odds.awayWin !== undefined) {
     await db
       .update(markets)
@@ -354,5 +398,8 @@ async function updateEventOdds(db: any, event: any, odds: NormalizedOdds): Promi
   logger.debug('Updated odds for event', {
     eventId: event.id,
     source: odds.source,
+    flagged: validation.flagged,
   });
+
+  return true;
 }

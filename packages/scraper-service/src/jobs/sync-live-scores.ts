@@ -4,6 +4,8 @@
  * Fetches live scores from multiple sources and updates events.
  * Queues finished events for settlement.
  * Adapted from Lambda handler for VPS deployment.
+ *
+ * Includes score validation to detect and flag anomalies.
  */
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -15,6 +17,7 @@ import { createJobLogger } from '../logger.js';
 import { recordRequest } from '../monitoring/metrics.js';
 import { getRateLimitDetector } from '../rate-limit/detector.js';
 import { waitWithJitter } from '../browser/behavior.js';
+import { validateAndProcessScore, isScoreStable } from '../validation/score-validator.js';
 import type { Page } from 'playwright';
 
 const logger = createJobLogger('sync-live-scores');
@@ -78,6 +81,32 @@ export async function runSyncLiveScores(): Promise<void> {
 
       for (const [eventId, score] of scores) {
         try {
+          // Find the sport for this event
+          const eventData = liveEventsWithSport.find(e => e.id === eventId);
+          const sportSlug = eventData?.sportSlug || 'football';
+
+          // Validate the score before applying
+          const validation = await validateAndProcessScore(
+            eventId,
+            sportSlug,
+            score.homeScore,
+            score.awayScore,
+            score.period || null,
+            score.minute ?? null,
+            '365scores' // source
+          );
+
+          // If score is invalid, skip the update (event was flagged)
+          if (!validation.valid) {
+            logger.warn('Score rejected due to validation failure', {
+              eventId,
+              homeScore: score.homeScore,
+              awayScore: score.awayScore,
+              flagged: validation.flagged,
+            });
+            continue;
+          }
+
           const newStatus = score.isFinished ? 'finished' : 'live';
 
           await db
@@ -94,10 +123,20 @@ export async function runSyncLiveScores(): Promise<void> {
 
           updated++;
 
-          // Queue for settlement if finished
+          // Queue for settlement if finished (but check score stability first)
           if (score.isFinished) {
-            finished++;
-            await queueForSettlement(eventId, score);
+            // Check if score has been stable for at least 5 minutes
+            const stability = await isScoreStable(eventId, 5);
+
+            if (stability.stable) {
+              finished++;
+              await queueForSettlement(eventId, score);
+            } else {
+              logger.info('Delaying settlement - score not stable', {
+                eventId,
+                recentChanges: stability.changeCount,
+              });
+            }
           }
         } catch (error) {
           logger.error(`Failed to update event: ${eventId}`, { error });

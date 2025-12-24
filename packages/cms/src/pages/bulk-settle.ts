@@ -1,10 +1,17 @@
 /**
  * Bulk Settle Page - Settle all pending predictions for finished events
+ *
+ * Includes settlement hold logic for:
+ * - Large potential wins
+ * - Previously flagged events
  */
 
 import { getDb, predictions, events, users, outcomes, markets } from '@sport-sage/database';
 import { eq, sql, and, desc, isNotNull } from 'drizzle-orm';
 import { layout, timeAgo, tooltip } from '../ui/layout.js';
+
+// Threshold for holding large wins for manual review
+const LARGE_WIN_THRESHOLD = 1000;
 
 interface UnsettledPrediction {
   predictionId: string;
@@ -244,9 +251,10 @@ export async function handleBulkSettle(query: URLSearchParams, environment: stri
   return layout('Bulk Settle', content, environment);
 }
 
-export async function executeBulkSettle(): Promise<{ success: boolean; message: string; settled: number }> {
+export async function executeBulkSettle(): Promise<{ success: boolean; message: string; settled: number; held: number }> {
   const db = getDb();
   let settledCount = 0;
+  let heldCount = 0;
   const errors: string[] = [];
 
   try {
@@ -256,7 +264,9 @@ export async function executeBulkSettle(): Promise<{ success: boolean; message: 
         predictionId: predictions.id,
         userId: predictions.userId,
         stake: predictions.stake,
+        potentialCoins: predictions.potentialCoins,
         outcomeId: predictions.outcomeId,
+        eventId: predictions.eventId,
       })
       .from(predictions)
       .innerJoin(events, eq(predictions.eventId, events.id))
@@ -281,37 +291,87 @@ export async function executeBulkSettle(): Promise<{ success: boolean; message: 
       }
 
       const result = outcome.isWinner ? 'won' : 'lost';
+      const payout = result === 'won' ? prediction.stake * 2 : 0;
+
+      // Check if this should be held for review
+      let shouldHold = false;
+      const holdReasons: string[] = [];
+
+      // Hold large wins for review
+      if (result === 'won' && payout >= LARGE_WIN_THRESHOLD) {
+        shouldHold = true;
+        holdReasons.push(`Large win: ${payout} coins`);
+      }
+
+      // Check if the event was previously flagged
+      if (prediction.eventId) {
+        const [evt] = await db
+          .select({
+            isFlagged: events.isFlagged,
+            flagReason: events.flagReason,
+            reviewedAt: events.reviewedAt,
+          })
+          .from(events)
+          .where(eq(events.id, prediction.eventId))
+          .limit(1);
+
+        // If event was flagged but not yet reviewed, hold settlement
+        if (evt?.isFlagged || (evt?.flagReason && !evt?.reviewedAt)) {
+          shouldHold = true;
+          holdReasons.push('Event was flagged for anomalies');
+        }
+      }
 
       try {
-        // Update prediction status
-        await db.update(predictions)
-          .set({ status: result, settledAt: new Date() })
-          .where(eq(predictions.id, prediction.predictionId));
+        if (shouldHold) {
+          // Hold the prediction for manual review
+          await db.update(predictions)
+            .set({
+              isHeld: true,
+              holdReason: holdReasons.join('; '),
+              heldAt: new Date(),
+            })
+            .where(eq(predictions.id, prediction.predictionId));
+          heldCount++;
+        } else {
+          // Settle normally
+          await db.update(predictions)
+            .set({ status: result, settledAt: new Date() })
+            .where(eq(predictions.id, prediction.predictionId));
 
-        // Update user coins if won (return stake + winnings based on 2x payout)
-        if (result === 'won') {
-          const payout = prediction.stake * 2;
-          await db.update(users)
-            .set({ coins: sql`${users.coins} + ${payout}` })
-            .where(eq(users.id, prediction.userId));
+          // Update user coins if won
+          if (result === 'won') {
+            await db.update(users)
+              .set({ coins: sql`${users.coins} + ${payout}` })
+              .where(eq(users.id, prediction.userId));
+          }
+
+          settledCount++;
         }
-
-        settledCount++;
       } catch (err: any) {
         errors.push(`Failed to settle ${prediction.predictionId}: ${err.message}`);
       }
     }
 
-    if (errors.length > 0 && settledCount === 0) {
-      return { success: false, message: `Settlement failed: ${errors[0]}`, settled: 0 };
+    if (errors.length > 0 && settledCount === 0 && heldCount === 0) {
+      return { success: false, message: `Settlement failed: ${errors[0]}`, settled: 0, held: 0 };
+    }
+
+    let message = `Settled ${settledCount} predictions`;
+    if (heldCount > 0) {
+      message += `, held ${heldCount} for review`;
+    }
+    if (errors.length > 0) {
+      message += ` (${errors.length} errors)`;
     }
 
     return {
       success: true,
-      message: `Successfully settled ${settledCount} predictions${errors.length > 0 ? ` (${errors.length} errors)` : ''}`,
+      message,
       settled: settledCount,
+      held: heldCount,
     };
   } catch (error: any) {
-    return { success: false, message: error.message, settled: 0 };
+    return { success: false, message: error.message, settled: 0, held: 0 };
   }
 }

@@ -15,6 +15,13 @@
       "when": 1766347216635,
       "tag": "0001_messy_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1766589190971,
+      "tag": "0002_low_midnight",
+      "breakpoints": true
     }
   ]
 }

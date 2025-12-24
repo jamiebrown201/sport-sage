@@ -24,3 +24,6 @@ export * from './shop.js';
 
 // Monitoring schemas
 export * from './monitoring.js';
+
+// Audit schemas (score history, audit log, odds history)
+export * from './audit.js';

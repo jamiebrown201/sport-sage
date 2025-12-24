@@ -8,9 +8,13 @@ import {
   numeric,
   pgEnum,
   index,
+  text,
+  uniqueIndex,
+  check,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { sports, competitions, teams, players } from './sports.js';
+import { users } from './users.js';
 
 // Enums
 export const eventStatusEnum = pgEnum('event_status', [
@@ -67,6 +71,17 @@ export const events = pgTable(
     predictionCount: integer('prediction_count').notNull().default(0),
     externalFlashscoreId: varchar('external_flashscore_id', { length: 100 }),
     externalOddscheckerId: varchar('external_oddschecker_id', { length: 100 }),
+
+    // Data protection: flagging suspicious events
+    isFlagged: boolean('is_flagged').notNull().default(false),
+    flagReason: text('flag_reason'),
+    flaggedAt: timestamp('flagged_at', { withTimezone: true }),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+
+    // Optimistic locking for race condition protection
+    version: integer('version').notNull().default(1),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -78,6 +93,12 @@ export const events = pgTable(
     index('events_status_start_time_idx').on(table.status, table.startTime),
     index('events_featured_idx').on(table.isFeatured),
     index('events_external_flashscore_idx').on(table.externalFlashscoreId),
+    // Prevent duplicate events from same source
+    uniqueIndex('events_external_flashscore_unique').on(table.externalFlashscoreId),
+    // Index for finding flagged events
+    index('events_flagged_idx').on(table.isFlagged),
+    // Ensure scores are non-negative (CHECK constraint)
+    check('events_scores_positive', sql`(home_score IS NULL OR home_score >= 0) AND (away_score IS NULL OR away_score >= 0)`),
   ]
 );
 
@@ -174,6 +195,10 @@ export const eventsRelations = relations(events, ({ one, many }) => ({
     fields: [events.player2Id],
     references: [players.id],
     relationName: 'player2',
+  }),
+  reviewer: one(users, {
+    fields: [events.reviewedBy],
+    references: [users.id],
   }),
   markets: many(markets),
   sponsoredEvent: one(sponsoredEvents),
