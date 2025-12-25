@@ -88,8 +88,19 @@ export default function RegisterScreen(): React.ReactElement {
       return;
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    // Password must contain uppercase, lowercase, number, and special character
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+
+    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSpecial) {
+      setError('Password must contain uppercase, lowercase, number, and special character');
       return;
     }
 
@@ -97,11 +108,14 @@ export default function RegisterScreen(): React.ReactElement {
     setError('');
 
     try {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await register(username, email, password);
-      router.replace('/onboarding');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Navigate to verification screen
+      router.replace('/auth/verify');
     } catch (err) {
-      setError('Registration failed. Please try again.');
+      const message = err instanceof Error ? err.message : 'Registration failed. Please try again.';
+      setError(message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsLoading(false);
     }

@@ -37,6 +37,8 @@ import {
   mockReferralStats,
   mockReferrals,
 } from './mock-data';
+import { cognitoAuth, CognitoErrorCodes, getErrorMessage } from './auth/cognito';
+import * as api from './api';
 
 // ============================================================================
 // AUTH CONTEXT
@@ -70,6 +72,14 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   const [isLoading, setIsLoading] = useState(true);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [pendingSocialAuth, setPendingSocialAuth] = useState(false);
+  // Email verification flow
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
+  const [pendingUsername, setPendingUsername] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  // Password reset flow
+  const [pendingPasswordReset, setPendingPasswordReset] = useState(false);
+  const [passwordResetEmail, setPasswordResetEmail] = useState<string | null>(null);
 
   useEffect(() => {
     loadStoredUser();
@@ -77,15 +87,31 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
 
   const loadStoredUser = async (): Promise<void> => {
     try {
-      const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.USER);
-      const storedStats = await AsyncStorage.getItem(STORAGE_KEYS.STATS);
       const onboardingComplete = await AsyncStorage.getItem(STORAGE_KEYS.ONBOARDING_COMPLETE);
-
       setHasCompletedOnboarding(onboardingComplete === 'true');
 
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
-        setStats(storedStats ? JSON.parse(storedStats) : mockUserStats);
+      // Check for existing Cognito session
+      const session = await cognitoAuth.getSession();
+      if (session) {
+        // We have a valid session, fetch user data from API
+        try {
+          const { user: userData, stats: userStats } = await api.getMe();
+          setUser(userData as User);
+          setStats(userStats as UserStats);
+          await saveUser(userData as User, userStats as UserStats);
+        } catch (error) {
+          // Session exists but user not in DB (shouldn't happen, but handle it)
+          console.error('Session exists but failed to fetch user:', error);
+          await cognitoAuth.signOut();
+        }
+      } else {
+        // No session, check for cached user (for offline support)
+        const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.USER);
+        const storedStats = await AsyncStorage.getItem(STORAGE_KEYS.STATS);
+        if (storedUser) {
+          setUser(JSON.parse(storedUser));
+          setStats(storedStats ? JSON.parse(storedStats) : null);
+        }
       }
     } catch (error) {
       console.error('Failed to load user:', error);
@@ -108,128 +134,154 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
     }
   };
 
-  const login = useCallback(async (email: string, _password: string): Promise<void> => {
-    // Mock login - in production this would hit an API
-    const loggedInUser: User = {
-      ...mockUser,
-      email,
-    };
-    const userStats = { ...mockUserStats };
+  const login = useCallback(async (email: string, password: string): Promise<void> => {
+    setAuthError(null);
+    try {
+      // Sign in with Cognito
+      await cognitoAuth.signIn(email, password);
 
-    setUser(loggedInUser);
-    setStats(userStats);
-    await saveUser(loggedInUser, userStats);
+      // Try to fetch user data from API
+      try {
+        const { user: userData, stats: userStats } = await api.getMe();
+        setUser(userData as User);
+        setStats(userStats as UserStats);
+        await saveUser(userData as User, userStats as UserStats);
+      } catch (apiError) {
+        // If user doesn't exist in DB (404), create them
+        // This happens on first login after email verification
+        if (api.isApiError(apiError) && apiError.statusCode === 404) {
+          // Get username from Cognito attributes
+          const session = await cognitoAuth.getSession();
+          const payload = session?.getIdToken().payload as Record<string, string> | undefined;
+          const username = payload?.['custom:username'] ||
+                           payload?.['preferred_username'] ||
+                           email.split('@')[0];
+
+          // Register user in database
+          const { user: userData, stats: userStats } = await api.register(username);
+          setUser(userData as User);
+          setStats(userStats as UserStats);
+          await saveUser(userData as User, userStats as UserStats);
+        } else {
+          throw apiError;
+        }
+      }
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      // Sign out if login failed
+      try {
+        await cognitoAuth.signOut();
+      } catch {}
+      throw new Error(message);
+    }
   }, []);
 
-  const register = useCallback(async (username: string, email: string, _password: string): Promise<void> => {
-    // Mock register - new user gets 1000 coins, 0 stars, 0 gems
-    const newUser: User = {
-      id: `user_${Date.now()}`,
-      username,
-      email,
-      coins: 1000,
-      stars: 0,
-      gems: 0,
-      subscriptionTier: 'free',
-      isAdsEnabled: true,
-      isOver18: true,
-      showAffiliates: false,
-      createdAt: new Date().toISOString(),
-    };
+  const register = useCallback(async (username: string, email: string, password: string): Promise<void> => {
+    setAuthError(null);
+    try {
+      // Sign up with Cognito - this sends verification email
+      await cognitoAuth.signUp({ email, password, username });
 
-    const newStats: UserStats = {
-      userId: newUser.id,
-      totalPredictions: 0,
-      totalWins: 0,
-      totalLosses: 0,
-      winRate: 0,
-      currentStreak: 0,
-      bestStreak: 0,
-      totalStarsEarned: 0,
-      totalCoinsWagered: 0,
-      adsWatchedToday: 0,
-      hasPredictionBoost: false,
-    };
-
-    setUser(newUser);
-    setStats(newStats);
-    await saveUser(newUser, newStats);
+      // Store pending registration state
+      setPendingVerification(true);
+      setVerificationEmail(email);
+      setPendingUsername(username);
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      throw new Error(message);
+    }
   }, []);
 
-  // Mock Apple Sign-In - creates a partial user pending username selection
+  // Verify email after registration
+  const verifyEmail = useCallback(async (code: string): Promise<void> => {
+    if (!verificationEmail) {
+      throw new Error('No pending verification');
+    }
+
+    setAuthError(null);
+    try {
+      // Confirm signup with Cognito
+      await cognitoAuth.confirmSignUp(verificationEmail, code);
+
+      // User is now confirmed in Cognito
+      // They need to log in manually - the DB user will be created on first login
+      // via the /api/auth/me endpoint (which calls register if user doesn't exist)
+      setPendingVerification(false);
+      setVerificationEmail(null);
+      setPendingUsername(null);
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      throw new Error(message);
+    }
+  }, [verificationEmail]);
+
+  // Resend verification code
+  const resendVerificationCode = useCallback(async (): Promise<void> => {
+    if (!verificationEmail) {
+      throw new Error('No pending verification');
+    }
+
+    setAuthError(null);
+    try {
+      await cognitoAuth.resendConfirmationCode(verificationEmail);
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      throw new Error(message);
+    }
+  }, [verificationEmail]);
+
+  // Forgot password - request reset code
+  const forgotPassword = useCallback(async (email: string): Promise<void> => {
+    setAuthError(null);
+    try {
+      await cognitoAuth.forgotPassword(email);
+      setPendingPasswordReset(true);
+      setPasswordResetEmail(email);
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      throw new Error(message);
+    }
+  }, []);
+
+  // Confirm forgot password with code and new password
+  const confirmForgotPassword = useCallback(async (code: string, newPassword: string): Promise<void> => {
+    if (!passwordResetEmail) {
+      throw new Error('No pending password reset');
+    }
+
+    setAuthError(null);
+    try {
+      await cognitoAuth.confirmForgotPassword(passwordResetEmail, code, newPassword);
+      setPendingPasswordReset(false);
+      setPasswordResetEmail(null);
+    } catch (error) {
+      const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      setAuthError(message);
+      throw new Error(message);
+    }
+  }, [passwordResetEmail]);
+
+  const clearAuthError = useCallback((): void => {
+    setAuthError(null);
+  }, []);
+
+  // Apple Sign-In - Coming Soon
   const loginWithApple = useCallback(async (): Promise<void> => {
-    // In production: use expo-apple-authentication
-    // For now, mock the flow - user will need to set username next
-    const partialUser: User = {
-      id: `apple_${Date.now()}`,
-      username: '', // Empty - will be set in username selection screen
-      email: 'user@privaterelay.appleid.com',
-      coins: 1000,
-      stars: 0,
-      gems: 0,
-      subscriptionTier: 'free',
-      isAdsEnabled: true,
-      isOver18: true,
-      showAffiliates: false,
-      createdAt: new Date().toISOString(),
-    };
-
-    const newStats: UserStats = {
-      userId: partialUser.id,
-      totalPredictions: 0,
-      totalWins: 0,
-      totalLosses: 0,
-      winRate: 0,
-      currentStreak: 0,
-      bestStreak: 0,
-      totalStarsEarned: 0,
-      totalCoinsWagered: 0,
-      adsWatchedToday: 0,
-      hasPredictionBoost: false,
-    };
-
-    setUser(partialUser);
-    setStats(newStats);
-    setPendingSocialAuth(true);
-    // Don't save until username is set
+    const message = 'Apple Sign-In coming soon!';
+    setAuthError(message);
+    throw new Error(message);
   }, []);
 
-  // Mock Google Sign-In - creates a partial user pending username selection
+  // Google Sign-In - Coming Soon
   const loginWithGoogle = useCallback(async (): Promise<void> => {
-    // In production: use expo-auth-session with Google
-    // For now, mock the flow - user will need to set username next
-    const partialUser: User = {
-      id: `google_${Date.now()}`,
-      username: '', // Empty - will be set in username selection screen
-      email: 'user@gmail.com',
-      coins: 1000,
-      stars: 0,
-      gems: 0,
-      subscriptionTier: 'free',
-      isAdsEnabled: true,
-      isOver18: true,
-      showAffiliates: false,
-      createdAt: new Date().toISOString(),
-    };
-
-    const newStats: UserStats = {
-      userId: partialUser.id,
-      totalPredictions: 0,
-      totalWins: 0,
-      totalLosses: 0,
-      winRate: 0,
-      currentStreak: 0,
-      bestStreak: 0,
-      totalStarsEarned: 0,
-      totalCoinsWagered: 0,
-      adsWatchedToday: 0,
-      hasPredictionBoost: false,
-    };
-
-    setUser(partialUser);
-    setStats(newStats);
-    setPendingSocialAuth(true);
-    // Don't save until username is set
+    const message = 'Google Sign-In coming soon!';
+    setAuthError(message);
+    throw new Error(message);
   }, []);
 
   // Set username after social auth
@@ -243,8 +295,23 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   }, [user, stats]);
 
   const logout = useCallback(async (): Promise<void> => {
+    try {
+      // Sign out from Cognito
+      await cognitoAuth.signOut();
+    } catch (error) {
+      console.error('Failed to sign out from Cognito:', error);
+    }
+
+    // Clear local state
     setUser(null);
     setStats(null);
+    setPendingVerification(false);
+    setVerificationEmail(null);
+    setPendingUsername(null);
+    setPendingPasswordReset(false);
+    setPasswordResetEmail(null);
+    setAuthError(null);
+
     try {
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.USER,
@@ -282,8 +349,20 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
     isAuthenticated: !!user,
     hasCompletedOnboarding,
     pendingSocialAuth,
+    // Email verification flow
+    pendingVerification,
+    verificationEmail,
+    authError,
+    // Password reset flow
+    pendingPasswordReset,
+    passwordResetEmail,
+    // Auth methods
     login,
     register,
+    verifyEmail,
+    resendVerificationCode,
+    forgotPassword,
+    confirmForgotPassword,
     loginWithApple,
     loginWithGoogle,
     setUsername,
@@ -291,6 +370,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
     updateUser,
     updateStats,
     completeOnboarding,
+    clearAuthError,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -315,11 +395,72 @@ interface WalletProviderProps {
 }
 
 export function WalletProvider({ children }: WalletProviderProps): React.ReactElement {
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, isAuthenticated } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [canClaimDailyTopup, setCanClaimDailyTopup] = useState(false);
+  const [nextTopupAt, setNextTopupAt] = useState<string | null>(null);
 
   const coins = user?.coins ?? 0;
   const stars = user?.stars ?? 0;
   const gems = user?.gems ?? 0;
+
+  // Fetch wallet data from API
+  const fetchWallet = useCallback(async (showLoading = true): Promise<void> => {
+    if (!isAuthenticated) return;
+
+    if (showLoading) setIsLoading(true);
+    setError(null);
+
+    try {
+      const wallet = await api.getWallet();
+      updateUser({
+        coins: wallet.coins,
+        stars: wallet.stars,
+        gems: wallet.gems,
+      });
+      setCanClaimDailyTopup(wallet.canClaimDailyTopup);
+      setNextTopupAt(wallet.nextTopupAt);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load wallet';
+      setError(message);
+      console.error('Failed to fetch wallet:', err);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [isAuthenticated, updateUser]);
+
+  // Refresh wallet data
+  const refresh = useCallback(async (): Promise<void> => {
+    setIsRefreshing(true);
+    await fetchWallet(false);
+  }, [fetchWallet]);
+
+  // Fetch wallet on mount when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchWallet();
+    }
+  }, [isAuthenticated, fetchWallet]);
+
+  // Claim daily topup
+  const claimDailyTopup = useCallback(async (): Promise<{ coinsAdded: number; newBalance: number } | null> => {
+    if (!canClaimDailyTopup) return null;
+
+    try {
+      const result = await api.claimDailyTopup();
+      updateUser({ coins: result.newBalance });
+      setCanClaimDailyTopup(false);
+      setNextTopupAt(result.nextClaimAt);
+      return { coinsAdded: result.coinsAdded, newBalance: result.newBalance };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to claim daily topup';
+      setError(message);
+      return null;
+    }
+  }, [canClaimDailyTopup, updateUser]);
 
   const addCoins = useCallback((amount: number): void => {
     updateUser({ coins: coins + amount });
@@ -353,6 +494,13 @@ export function WalletProvider({ children }: WalletProviderProps): React.ReactEl
     coins,
     stars,
     gems,
+    isLoading,
+    isRefreshing,
+    error,
+    refresh,
+    canClaimDailyTopup,
+    nextTopupAt,
+    claimDailyTopup,
     addCoins,
     deductCoins,
     addStars,
@@ -378,6 +526,11 @@ export function useWallet(): WalletContextType {
 
 interface PredictionsContextType {
   predictions: Prediction[];
+  isLoading: boolean;
+  isRefreshing: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+  createPrediction: (eventId: string, outcomeId: string, stake: number) => Promise<Prediction | null>;
   addPrediction: (prediction: Prediction) => void;
   updatePrediction: (id: string, updates: Partial<Prediction>) => void;
   getPendingPredictions: () => Prediction[];
@@ -391,35 +544,88 @@ interface PredictionsProviderProps {
 }
 
 export function PredictionsProvider({ children }: PredictionsProviderProps): React.ReactElement {
-  const [predictions, setPredictions] = useState<Prediction[]>(mockPredictions);
+  const { isAuthenticated, updateUser, user } = useAuth();
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // Fetch predictions from API
+  const fetchPredictions = useCallback(async (showLoading = true): Promise<void> => {
+    if (!isAuthenticated) return;
+
+    if (showLoading) setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await api.getPredictions();
+      setPredictions(result.data as Prediction[]);
+      // Cache predictions locally for offline access
+      await AsyncStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(result.data));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load predictions';
+      setError(message);
+      console.error('Failed to fetch predictions:', err);
+      // Try to load from cache on error
+      try {
+        const stored = await AsyncStorage.getItem(STORAGE_KEYS.PREDICTIONS);
+        if (stored) {
+          setPredictions(JSON.parse(stored));
+        }
+      } catch {}
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [isAuthenticated]);
+
+  // Refresh predictions
+  const refresh = useCallback(async (): Promise<void> => {
+    setIsRefreshing(true);
+    await fetchPredictions(false);
+  }, [fetchPredictions]);
+
+  // Fetch predictions on mount when authenticated
   useEffect(() => {
-    loadPredictions();
-  }, []);
+    if (isAuthenticated) {
+      fetchPredictions();
+    }
+  }, [isAuthenticated, fetchPredictions]);
 
-  const loadPredictions = async (): Promise<void> => {
+  // Create a new prediction via API
+  const createPrediction = useCallback(async (
+    eventId: string,
+    outcomeId: string,
+    stake: number
+  ): Promise<Prediction | null> => {
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEYS.PREDICTIONS);
-      if (stored) {
-        setPredictions(JSON.parse(stored));
+      const result = await api.createPrediction({ eventId, outcomeId, stake });
+      const newPrediction = result.prediction as Prediction;
+
+      // Add to local state
+      setPredictions(prev => {
+        const updated = [newPrediction, ...prev];
+        AsyncStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(updated));
+        return updated;
+      });
+
+      // Update user's coin balance
+      if (user) {
+        updateUser({ coins: result.newBalance });
       }
-    } catch (error) {
-      console.error('Failed to load predictions:', error);
-    }
-  };
 
-  const savePredictions = async (preds: Prediction[]): Promise<void> => {
-    try {
-      await AsyncStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(preds));
-    } catch (error) {
-      console.error('Failed to save predictions:', error);
+      return newPrediction;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to place prediction';
+      setError(message);
+      throw new Error(message);
     }
-  };
+  }, [user, updateUser]);
 
   const addPrediction = useCallback((prediction: Prediction): void => {
     setPredictions(prev => {
       const updated = [prediction, ...prev];
-      savePredictions(updated);
+      AsyncStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(updated));
       return updated;
     });
   }, []);
@@ -427,7 +633,7 @@ export function PredictionsProvider({ children }: PredictionsProviderProps): Rea
   const updatePrediction = useCallback((id: string, updates: Partial<Prediction>): void => {
     setPredictions(prev => {
       const updated = prev.map(p => (p.id === id ? { ...p, ...updates } : p));
-      savePredictions(updated);
+      AsyncStorage.setItem(STORAGE_KEYS.PREDICTIONS, JSON.stringify(updated));
       return updated;
     });
   }, []);
@@ -442,6 +648,11 @@ export function PredictionsProvider({ children }: PredictionsProviderProps): Rea
 
   const value: PredictionsContextType = {
     predictions,
+    isLoading,
+    isRefreshing,
+    error,
+    refresh,
+    createPrediction,
     addPrediction,
     updatePrediction,
     getPendingPredictions,

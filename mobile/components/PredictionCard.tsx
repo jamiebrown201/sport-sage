@@ -1,34 +1,25 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { MotiView } from 'moti';
-import { Prediction } from '@/types';
+import { Prediction, PredictionEvent } from '@/types';
 import { Card, Badge } from '@/components/ui';
-import { CoinIcon, StarIcon, PendingIcon, WonIcon, LostIcon, FootballIcon, TennisIcon, DartsIcon, CricketIcon, BasketballIcon, GolfIcon, BoxingIcon, MMAIcon } from '@/components/icons';
+import { CoinIcon, StarIcon, FootballIcon } from '@/components/icons';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
-import { getEventTitle } from '@/lib/mock-data';
 
-function getSportIcon(slug: string, size: number, color: string): React.ReactElement {
-  switch (slug) {
-    case 'football':
-      return <FootballIcon size={size} color={color} />;
-    case 'tennis':
-      return <TennisIcon size={size} color={color} />;
-    case 'darts':
-      return <DartsIcon size={size} color={color} />;
-    case 'cricket':
-      return <CricketIcon size={size} color={color} />;
-    case 'basketball':
-      return <BasketballIcon size={size} color={color} />;
-    case 'golf':
-      return <GolfIcon size={size} color={color} />;
-    case 'boxing':
-      return <BoxingIcon size={size} color={color} />;
-    case 'mma':
-      return <MMAIcon size={size} color={color} />;
-    default:
-      return <FootballIcon size={size} color={color} />;
+// Helper to get event title from PredictionEvent
+function getPredictionEventTitle(event: PredictionEvent | null): string {
+  if (!event) return 'Unknown Event';
+
+  if (event.homeTeamName && event.awayTeamName) {
+    return `${event.homeTeamName} vs ${event.awayTeamName}`;
   }
+  if (event.player1Name && event.player2Name) {
+    return `${event.player1Name} vs ${event.player2Name}`;
+  }
+  if (event.homeTeamName) return event.homeTeamName;
+  if (event.player1Name) return event.player1Name;
+  return 'Unknown Event';
 }
 
 interface PredictionCardProps {
@@ -37,7 +28,7 @@ interface PredictionCardProps {
 }
 
 export function PredictionCard({ prediction, onPress }: PredictionCardProps): React.ReactElement {
-  const title = getEventTitle(prediction.event);
+  const title = getPredictionEventTitle(prediction.event);
   const isPending = prediction.status === 'pending';
   const isWon = prediction.status === 'won';
   const isLost = prediction.status === 'lost';
@@ -50,11 +41,20 @@ export function PredictionCard({ prediction, onPress }: PredictionCardProps): Re
       <View style={styles.header}>
         <View style={styles.eventInfo}>
           <View style={styles.sportIconContainer}>
-            {getSportIcon(prediction.event.sport.slug, 24, colors.textSecondary)}
+            <FootballIcon size={24} color={colors.textSecondary} />
           </View>
-          <View>
+          <View style={styles.eventTextContainer}>
             <Text style={styles.title} numberOfLines={1}>{title}</Text>
-            <Text style={styles.competition}>{prediction.event.competition}</Text>
+            {prediction.event && (
+              <Text style={styles.competition}>
+                {new Date(prediction.event.startTime).toLocaleDateString('en-GB', {
+                  day: 'numeric',
+                  month: 'short',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+            )}
           </View>
         </View>
         <Badge text={statusText} variant={statusVariant} />
@@ -62,8 +62,8 @@ export function PredictionCard({ prediction, onPress }: PredictionCardProps): Re
 
       <View style={styles.predictionInfo}>
         <Text style={styles.pickLabel}>Your pick:</Text>
-        <Text style={styles.pickValue}>{prediction.outcome.name}</Text>
-        <Text style={styles.odds}>@ {prediction.outcome.odds.toFixed(2)}</Text>
+        <Text style={styles.pickValue}>{prediction.outcome?.name ?? 'Unknown'}</Text>
+        <Text style={styles.odds}>@ {(prediction.outcome?.odds ?? prediction.odds).toFixed(2)}</Text>
       </View>
 
       <View style={styles.footer}>
@@ -122,13 +122,6 @@ export function PredictionCard({ prediction, onPress }: PredictionCardProps): Re
         </View>
       </View>
 
-      {prediction.starsMultiplier > 1 && (
-        <View style={styles.multiplier}>
-          <Text style={styles.multiplierText}>
-            {prediction.starsMultiplier}x Stars Boost Active
-          </Text>
-        </View>
-      )}
     </Card>
   );
 }
@@ -152,6 +145,9 @@ const styles = StyleSheet.create({
   sportIconContainer: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  eventTextContainer: {
+    flex: 1,
   },
   title: {
     fontSize: layout.fontSize.md,
@@ -244,17 +240,5 @@ const styles = StyleSheet.create({
     fontSize: layout.fontSize.lg,
     fontWeight: layout.fontWeight.bold,
     color: colors.error,
-  },
-  multiplier: {
-    marginTop: layout.spacing.md,
-    backgroundColor: colors.primaryDim,
-    padding: layout.spacing.sm,
-    borderRadius: layout.borderRadius.md,
-    alignItems: 'center',
-  },
-  multiplierText: {
-    fontSize: layout.fontSize.sm,
-    color: colors.primary,
-    fontWeight: layout.fontWeight.medium,
   },
 });

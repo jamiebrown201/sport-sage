@@ -5,8 +5,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import { getEventById, getEventTitle } from '@/lib/mock-data';
-import { useAuth, useWallet, usePredictions, useAccumulator, useFriends } from '@/lib/store';
-import { Outcome, Prediction, Event, ACCUMULATOR_LIMITS } from '@/types';
+import { useAuth, usePredictions, useAccumulator, useFriends } from '@/lib/store';
+import { Outcome, ACCUMULATOR_LIMITS } from '@/types';
 import { Card, Badge, Button } from '@/components/ui';
 import { PredictionSlip } from '@/components/PredictionSlip';
 import { AccumulatorSlip } from '@/components/AccumulatorSlip';
@@ -57,8 +57,8 @@ function getSportIcon(slug: string, size: number, color: string): React.ReactEle
 export default function EventDetailScreen(): React.ReactElement {
   const { id } = useLocalSearchParams<{ id: string }>();
   const event = id ? getEventById(id) : undefined;
-  const { user, updateUser, updateStats, stats } = useAuth();
-  const { addPrediction } = usePredictions();
+  const { user } = useAuth();
+  const { createPrediction } = usePredictions();
   const { getFriendPredictionsForEvent } = useFriends();
   const {
     addSelection,
@@ -109,49 +109,27 @@ export default function EventDetailScreen(): React.ReactElement {
   };
 
   const handlePlacePrediction = useCallback(async (stake: number): Promise<void> => {
-    if (!event || !selectedOutcome || !user || !stats) return;
+    if (!event || !selectedOutcome || !user) return;
 
     setIsPlacing(true);
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      // Create prediction via API
+      await createPrediction(event.id, selectedOutcome.id, stake);
 
-    const potentialCoins = Math.floor(stake * selectedOutcome.odds);
-    const potentialStars = Math.floor(potentialCoins - stake);
+      setSelectedOutcome(null);
 
-    // Create prediction
-    const prediction: Prediction = {
-      id: `pred_${Date.now()}`,
-      eventId: event.id,
-      event,
-      outcomeId: selectedOutcome.id,
-      outcome: selectedOutcome,
-      stake,
-      potentialCoins,
-      potentialStars,
-      starsMultiplier: stats.hasPredictionBoost ? 1.2 : 1.0,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-    };
-
-    // Deduct coins
-    updateUser({ coins: user.coins - stake });
-    updateStats({
-      totalPredictions: stats.totalPredictions + 1,
-      totalCoinsWagered: stats.totalCoinsWagered + stake,
-      hasPredictionBoost: false, // Clear the boost after use
-    });
-
-    // Add prediction
-    addPrediction(prediction);
-
-    setIsPlacing(false);
-    setSelectedOutcome(null);
-
-    // Show success and navigate
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.back();
-  }, [event, selectedOutcome, user, stats, updateUser, updateStats, addPrediction]);
+      // Show success and navigate
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.back();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to place prediction';
+      Alert.alert('Error', message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsPlacing(false);
+    }
+  }, [event, selectedOutcome, user, createPrediction]);
 
   if (!event) {
     return (

@@ -541,88 +541,115 @@ export const CURRENT_USER_STATS: UserStats = {
 // PREDICTIONS
 // ============================================================================
 
+// Helper to convert Event to PredictionEvent
+function toPredictionEvent(event: Event): {
+  id: string;
+  homeTeamName: string | null;
+  awayTeamName: string | null;
+  player1Name: string | null;
+  player2Name: string | null;
+  startTime: string;
+  status: string;
+  homeScore: number | null;
+  awayScore: number | null;
+} {
+  return {
+    id: event.id,
+    homeTeamName: event.homeTeam ?? null,
+    awayTeamName: event.awayTeam ?? null,
+    player1Name: event.player1 ?? null,
+    player2Name: event.player2 ?? null,
+    startTime: event.startTime,
+    status: event.status,
+    homeScore: event.homeScore ?? null,
+    awayScore: event.awayScore ?? null,
+  };
+}
+
 export const PREDICTIONS: Prediction[] = [
   // Pending
   {
     id: "pred_1",
-    eventId: "event_2",
-    event: EVENTS[1],
-    outcomeId: "out_2a",
-    outcome: { id: "out_2a", name: "Arsenal", odds: 2.1 },
+    type: "single",
     stake: 200,
+    odds: 2.1,
+    totalOdds: 2.1,
     potentialCoins: 420,
     potentialStars: 220,
-    starsMultiplier: 1.0,
     status: "pending",
+    settledCoins: null,
+    settledStars: null,
+    settledAt: null,
     createdAt: today(8, 0),
+    event: toPredictionEvent(EVENTS[1]),
+    outcome: { id: "out_2a", name: "Arsenal", odds: 2.1, isWinner: null },
   },
   {
     id: "pred_2",
-    eventId: "event_3",
-    event: EVENTS[2],
-    outcomeId: "out_3b",
-    outcome: { id: "out_3b", name: "Carlos Alcaraz", odds: 2.1 },
+    type: "single",
     stake: 150,
+    odds: 2.1,
+    totalOdds: 2.1,
     potentialCoins: 315,
     potentialStars: 165,
-    starsMultiplier: 1.0,
     status: "pending",
+    settledCoins: null,
+    settledStars: null,
+    settledAt: null,
     createdAt: today(8, 30),
+    event: toPredictionEvent(EVENTS[2]),
+    outcome: { id: "out_3b", name: "Carlos Alcaraz", odds: 2.1, isWinner: null },
   },
   // Won
   {
     id: "pred_3",
-    eventId: "event_f1",
-    event: FINISHED_EVENTS[0],
-    outcomeId: "out_f1c",
-    outcome: { id: "out_f1c", name: "Brighton", odds: 4.5, isWinner: true },
+    type: "single",
     stake: 100,
+    odds: 4.5,
+    totalOdds: 4.5,
     potentialCoins: 450,
     potentialStars: 350,
-    starsMultiplier: 1.0,
     status: "won",
+    settledCoins: 450,
+    settledStars: 350,
     settledAt: yesterday(17, 0),
     createdAt: yesterday(10, 0),
+    event: toPredictionEvent(FINISHED_EVENTS[0]),
+    outcome: { id: "out_f1c", name: "Brighton", odds: 4.5, isWinner: true },
   },
   // Lost
   {
     id: "pred_4",
-    eventId: "event_f2",
-    event: FINISHED_EVENTS[1],
-    outcomeId: "out_f2b",
-    outcome: {
-      id: "out_f2b",
-      name: "Peter Wright",
-      odds: 2.25,
-      isWinner: false,
-    },
+    type: "single",
     stake: 200,
+    odds: 2.25,
+    totalOdds: 2.25,
     potentialCoins: 450,
     potentialStars: 250,
-    starsMultiplier: 1.0,
     status: "lost",
+    settledCoins: null,
+    settledStars: null,
     settledAt: daysAgo(2, 22),
     createdAt: daysAgo(2, 18),
+    event: toPredictionEvent(FINISHED_EVENTS[1]),
+    outcome: { id: "out_f2b", name: "Peter Wright", odds: 2.25, isWinner: false },
   },
   // More won
   {
     id: "pred_5",
-    eventId: "event_f3",
-    event: FINISHED_EVENTS[2],
-    outcomeId: "out_f3a",
-    outcome: {
-      id: "out_f3a",
-      name: "Carlos Alcaraz",
-      odds: 1.8,
-      isWinner: true,
-    },
+    type: "single",
     stake: 150,
+    odds: 1.8,
+    totalOdds: 1.8,
     potentialCoins: 270,
     potentialStars: 120,
-    starsMultiplier: 1.0,
     status: "won",
+    settledCoins: 270,
+    settledStars: 120,
     settledAt: daysAgo(3, 16),
     createdAt: daysAgo(3, 10),
+    event: toPredictionEvent(FINISHED_EVENTS[2]),
+    outcome: { id: "out_f3a", name: "Carlos Alcaraz", odds: 1.8, isWinner: true },
   },
 ];
 

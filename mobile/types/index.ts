@@ -93,21 +93,42 @@ export interface Outcome {
 // PREDICTIONS
 // ============================================================================
 
-export type PredictionStatus = 'pending' | 'won' | 'lost' | 'void';
+export type PredictionStatus = 'pending' | 'won' | 'lost' | 'void' | 'cashout';
+
+export interface PredictionEvent {
+  id: string;
+  homeTeamName: string | null;
+  awayTeamName: string | null;
+  player1Name: string | null;
+  player2Name: string | null;
+  startTime: string;
+  status: string;
+  homeScore: number | null;
+  awayScore: number | null;
+}
+
+export interface PredictionOutcome {
+  id: string;
+  name: string;
+  odds: number;
+  isWinner: boolean | null;
+}
 
 export interface Prediction {
   id: string;
-  eventId: string;
-  event: Event;
-  outcomeId: string;
-  outcome: Outcome;
+  type: 'single' | 'accumulator';
   stake: number;
+  odds: number;
+  totalOdds: number;
   potentialCoins: number;
   potentialStars: number;
-  starsMultiplier: number;
   status: PredictionStatus;
-  settledAt?: string;
+  settledCoins: number | null;
+  settledStars: number | null;
+  settledAt: string | null;
   createdAt: string;
+  event: PredictionEvent | null;
+  outcome: PredictionOutcome | null;
 }
 
 // ============================================================================
@@ -668,8 +689,20 @@ export interface AuthContextType {
   isAuthenticated: boolean;
   hasCompletedOnboarding: boolean;
   pendingSocialAuth: boolean;
+  // Email verification flow
+  pendingVerification: boolean;
+  verificationEmail: string | null;
+  authError: string | null;
+  // Password reset flow
+  pendingPasswordReset: boolean;
+  passwordResetEmail: string | null;
+  // Auth methods
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
+  verifyEmail: (code: string) => Promise<void>;
+  resendVerificationCode: () => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
+  confirmForgotPassword: (code: string, newPassword: string) => Promise<void>;
   loginWithApple: () => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   setUsername: (username: string) => Promise<void>;
@@ -677,6 +710,7 @@ export interface AuthContextType {
   updateUser: (updates: Partial<User>) => void;
   updateStats: (updates: Partial<UserStats>) => void;
   completeOnboarding: () => Promise<void>;
+  clearAuthError: () => void;
 }
 
 // ============================================================================
@@ -687,6 +721,16 @@ export interface WalletContextType {
   coins: number;
   stars: number;
   gems: number;
+  // Loading and refresh
+  isLoading: boolean;
+  isRefreshing: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+  // Daily topup
+  canClaimDailyTopup: boolean;
+  nextTopupAt: string | null;
+  claimDailyTopup: () => Promise<{ coinsAdded: number; newBalance: number } | null>;
+  // Mutations (local only for optimistic updates)
   addCoins: (amount: number) => void;
   deductCoins: (amount: number) => boolean;
   addStars: (amount: number) => void;

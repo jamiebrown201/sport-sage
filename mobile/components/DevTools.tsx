@@ -193,7 +193,7 @@ export function DevTools({ visible, onClose }: DevToolsProps): React.ReactElemen
             pendingPredictions.map((prediction) => (
               <Card key={prediction.id} style={styles.predictionCard}>
                 <View style={styles.predictionHeader}>
-                  <Text style={styles.predictionTitle}>{prediction.outcome.name}</Text>
+                  <Text style={styles.predictionTitle}>{prediction.outcome?.name ?? 'Unknown'}</Text>
                   <Badge text="Pending" variant="warning" />
                 </View>
                 <View style={styles.predictionStats}>

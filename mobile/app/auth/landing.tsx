@@ -1,11 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
-import Svg, { Path, Circle } from 'react-native-svg';
-import { Button } from '@/components/ui';
+import Svg, { Path } from 'react-native-svg';
 import { TrophyIcon, CoinIcon, StarIcon, TargetIcon } from '@/components/icons';
 import { useAuth } from '@/lib/store';
 import { colors } from '@/constants/colors';
@@ -71,14 +70,24 @@ export default function LandingScreen(): React.ReactElement {
 
   const handleAppleSignIn = async (): Promise<void> => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await loginWithApple();
-    router.replace('/auth/username');
+    try {
+      await loginWithApple();
+      router.replace('/auth/username');
+    } catch (error) {
+      // Show coming soon message
+      Alert.alert('Coming Soon', 'Apple Sign-In will be available soon! For now, please use email to sign up.');
+    }
   };
 
   const handleGoogleSignIn = async (): Promise<void> => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await loginWithGoogle();
-    router.replace('/auth/username');
+    try {
+      await loginWithGoogle();
+      router.replace('/auth/username');
+    } catch (error) {
+      // Show coming soon message
+      Alert.alert('Coming Soon', 'Google Sign-In will be available soon! For now, please use email to sign up.');
+    }
   };
 
   const handleEmailSignIn = (): void => {

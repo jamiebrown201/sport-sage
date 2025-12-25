@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Link, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
+import * as Haptics from 'expo-haptics';
 import { Button, Input } from '@/components/ui';
 import { EyeIcon, EyeOffIcon } from '@/components/icons';
 import { colors } from '@/constants/colors';
@@ -29,9 +30,12 @@ export default function LoginScreen(): React.ReactElement {
 
     try {
       await login(email, password);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/(tabs)');
     } catch (err) {
-      setError('Invalid email or password');
+      const message = err instanceof Error ? err.message : 'Invalid email or password';
+      setError(message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsLoading(false);
     }
@@ -83,6 +87,12 @@ export default function LoginScreen(): React.ReactElement {
             rightIcon={showPassword ? <EyeOffIcon size={20} color={colors.textSecondary} /> : <EyeIcon size={20} color={colors.textSecondary} />}
             onRightIconPress={() => setShowPassword(!showPassword)}
           />
+
+          <Link href="/auth/forgot-password" asChild>
+            <Pressable style={styles.forgotPassword}>
+              <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+            </Pressable>
+          </Link>
 
           <Button
             title="Sign In"
@@ -165,5 +175,14 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: layout.fontSize.md,
     fontWeight: layout.fontWeight.semibold,
+  },
+  forgotPassword: {
+    alignSelf: 'flex-end',
+    marginTop: -layout.spacing.sm,
+  },
+  forgotPasswordText: {
+    color: colors.primary,
+    fontSize: layout.fontSize.sm,
+    fontWeight: layout.fontWeight.medium,
   },
 });
