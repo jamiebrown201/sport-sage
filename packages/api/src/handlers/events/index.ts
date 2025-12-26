@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getDb, events, markets, outcomes, sports } from '@sport-sage/database';
 import { eq, and, gte, lte, desc, asc, sql } from 'drizzle-orm';
 
@@ -11,7 +11,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function response(statusCode: number, body: unknown): APIGatewayProxyResult {
+function response(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode,
     headers: corsHeaders,
@@ -19,8 +19,11 @@ function response(statusCode: number, body: unknown): APIGatewayProxyResult {
   };
 }
 
-export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const { httpMethod, path, pathParameters, queryStringParameters } = event;
+export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  const httpMethod = event.requestContext.http.method;
+  const path = event.rawPath;
+  const pathParameters = event.pathParameters;
+  const queryStringParameters = event.queryStringParameters;
   const route = path.replace(/^\/api\/events\/?/, '').replace(/\/$/, '') || '';
 
   try {
@@ -60,7 +63,7 @@ interface ListEventsParams {
   pageSize?: string;
 }
 
-async function handleListEvents(params: ListEventsParams): Promise<APIGatewayProxyResult> {
+async function handleListEvents(params: ListEventsParams): Promise<APIGatewayProxyResultV2> {
   const page = Math.max(1, parseInt(params.page || '1', 10));
   const pageSize = Math.min(50, Math.max(1, parseInt(params.pageSize || '20', 10)));
   const offset = (page - 1) * pageSize;
@@ -145,7 +148,7 @@ async function handleListEvents(params: ListEventsParams): Promise<APIGatewayPro
   });
 }
 
-async function handleListSports(): Promise<APIGatewayProxyResult> {
+async function handleListSports(): Promise<APIGatewayProxyResultV2> {
   const sportsData = await db
     .select()
     .from(sports)
@@ -175,7 +178,7 @@ async function handleListSports(): Promise<APIGatewayProxyResult> {
   return response(200, { data });
 }
 
-async function handleFeaturedEvents(): Promise<APIGatewayProxyResult> {
+async function handleFeaturedEvents(): Promise<APIGatewayProxyResultV2> {
   const featured = await db.query.events.findMany({
     where: and(
       eq(events.isFeatured, true),
@@ -223,7 +226,7 @@ async function handleFeaturedEvents(): Promise<APIGatewayProxyResult> {
   });
 }
 
-async function handleGetEvent(eventId: string): Promise<APIGatewayProxyResult> {
+async function handleGetEvent(eventId: string): Promise<APIGatewayProxyResultV2> {
   // Validate UUID format
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(eventId)) {

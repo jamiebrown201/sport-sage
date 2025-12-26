@@ -4,7 +4,8 @@ import { MotiPressable } from 'moti/interactions';
 import * as Haptics from 'expo-haptics';
 import { Event, Outcome } from '@/types';
 import { Card, Badge } from '@/components/ui';
-import { FootballIcon, TennisIcon, DartsIcon, CricketIcon, UsersIcon, LiveIcon, BasketballIcon, GolfIcon, BoxingIcon, MMAIcon } from '@/components/icons';
+import { FootballIcon, TennisIcon, DartsIcon, CricketIcon, UsersIcon, BasketballIcon, GolfIcon, BoxingIcon, MMAIcon } from '@/components/icons';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { colors, getOddsColor } from '@/constants/colors';
 import { layout } from '@/constants/layout';
 import { getEventTitle } from '@/lib/mock-data';
@@ -91,10 +92,7 @@ export function EventCard({ event, onPress, compact = false, friendCount }: Even
         </View>
         <View style={styles.timeContainer}>
           {isLive ? (
-            <View style={styles.liveIndicator}>
-              <LiveIcon size={12} color={colors.error} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
+            <LiveIndicator size="sm" />
           ) : (
             <>
               <Text style={styles.date}>{dateString}</Text>
@@ -182,21 +180,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: layout.spacing.md,
-  },
-  liveIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    paddingHorizontal: layout.spacing.sm,
-    paddingVertical: 4,
-    borderRadius: layout.borderRadius.sm,
-  },
-  liveText: {
-    fontSize: layout.fontSize.xs,
-    fontWeight: layout.fontWeight.bold,
-    color: colors.error,
-    letterSpacing: 0.5,
   },
   liveScoreContainer: {
     flexDirection: 'row',

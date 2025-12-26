@@ -30,6 +30,7 @@ export function Input({
   rightIcon,
   onRightIconPress,
   containerStyle,
+  secureTextEntry,
   ...props
 }: InputProps): React.ReactElement {
   const [isFocused, setIsFocused] = useState(false);
@@ -51,6 +52,8 @@ export function Input({
   const inputStyles: TextStyle[] = [styles.input];
   if (leftIcon) inputStyles.push(styles.inputWithLeftIcon);
   if (rightIcon) inputStyles.push(styles.inputWithRightIcon);
+  // Use larger font for password fields so dots are more visible
+  if (secureTextEntry) inputStyles.push(styles.inputSecure);
 
   return (
     <View style={containerStyle}>
@@ -59,6 +62,7 @@ export function Input({
         {leftIcon && <View style={styles.iconLeft}>{leftIcon}</View>}
         <TextInput
           {...props}
+          secureTextEntry={secureTextEntry}
           style={inputStyles}
           placeholderTextColor={colors.textMuted}
           onFocus={handleFocus}
@@ -100,6 +104,10 @@ const styles = StyleSheet.create({
     fontSize: layout.fontSize.md,
     paddingVertical: layout.spacing.md,
     paddingHorizontal: layout.spacing.md,
+  },
+  inputSecure: {
+    fontSize: layout.fontSize.lg,
+    letterSpacing: 2,
   },
   inputWithLeftIcon: {
     paddingLeft: layout.spacing.sm,

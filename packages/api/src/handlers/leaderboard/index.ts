@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getDb, users, userStats } from '@sport-sage/database';
 import { eq, desc, sql } from 'drizzle-orm';
 
@@ -11,7 +11,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function response(statusCode: number, body: unknown): APIGatewayProxyResult {
+function response(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode,
     headers: corsHeaders,
@@ -19,16 +19,17 @@ function response(statusCode: number, body: unknown): APIGatewayProxyResult {
   };
 }
 
-function getCognitoId(event: APIGatewayProxyEvent): string | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (claims?.sub) return claims.sub as string;
-  const jwt = event.requestContext.authorizer?.jwt?.claims;
+function getCognitoId(event: APIGatewayProxyEventV2): string | null {
+  // HTTP API v2 format - JWT authorizer puts claims here
+  const jwt = (event.requestContext as any).authorizer?.jwt?.claims;
   if (jwt?.sub) return jwt.sub as string;
   return null;
 }
 
-export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const { httpMethod, path, queryStringParameters } = event;
+export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  const httpMethod = event.requestContext.http.method;
+  const path = event.rawPath;
+  const queryStringParameters = event.queryStringParameters;
   const route = path.replace(/^\/api\/leaderboard\/?/, '').replace(/\/$/, '') || '';
 
   const cognitoId = getCognitoId(event);
@@ -70,7 +71,7 @@ interface GetLeaderboardParams {
 async function handleGetLeaderboard(
   currentUserId: string,
   params: GetLeaderboardParams
-): Promise<APIGatewayProxyResult> {
+): Promise<APIGatewayProxyResultV2> {
   const page = Math.max(1, parseInt(params.page || '1', 10));
   const pageSize = Math.min(100, Math.max(1, parseInt(params.pageSize || '50', 10)));
   const offset = (page - 1) * pageSize;
@@ -144,7 +145,7 @@ async function handleGetLeaderboard(
   });
 }
 
-async function handleGetPosition(userId: string): Promise<APIGatewayProxyResult> {
+async function handleGetPosition(userId: string): Promise<APIGatewayProxyResultV2> {
   // Get user's stats
   const statsResult = await db.select().from(userStats).where(eq(userStats.userId, userId)).limit(1);
 

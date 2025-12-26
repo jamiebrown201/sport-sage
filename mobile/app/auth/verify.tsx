@@ -5,10 +5,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import Svg, { Path } from 'react-native-svg';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Button } from '@/components/ui';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
 import { useAuth } from '@/lib/store';
+
+const PENDING_VERIFICATION_KEY = '@sport_sage_pending_verification';
 
 function MailIcon({ size = 48, color = colors.primary }: { size?: number; color?: string }): React.ReactElement {
   return (
@@ -53,16 +56,48 @@ export default function VerifyScreen(): React.ReactElement {
   const [isResending, setIsResending] = useState(false);
   const [error, setError] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Local state for verification data - loaded from AsyncStorage directly
+  const [localEmail, setLocalEmail] = useState<string | null>(null);
+  const [localUsername, setLocalUsername] = useState<string | null>(null);
+  const [localPassword, setLocalPassword] = useState<string | null>(null);
 
   const inputRefs = useRef<(RNTextInput | null)[]>([]);
-  const { verifyEmail, resendVerificationCode, verificationEmail, pendingVerification } = useAuth();
+  const { verifyEmail, resendVerificationCode } = useAuth();
 
-  // Redirect if no pending verification
+  // Read pending verification data directly from AsyncStorage on mount
+  // This avoids the race condition with React context state propagation
   useEffect(() => {
-    if (!pendingVerification || !verificationEmail) {
-      router.replace('/auth/login');
-    }
-  }, [pendingVerification, verificationEmail]);
+    const loadPendingVerification = async (): Promise<void> => {
+      console.log('[Verify] Loading pending verification from AsyncStorage...');
+      try {
+        const data = await AsyncStorage.getItem(PENDING_VERIFICATION_KEY);
+        console.log('[Verify] AsyncStorage data:', data ? 'found' : 'null');
+
+        if (data) {
+          const parsed = JSON.parse(data);
+          if (parsed.pending && parsed.username && parsed.email) {
+            console.log('[Verify] Found valid pending verification', { username: parsed.username, email: parsed.email });
+            setLocalUsername(parsed.username);
+            setLocalEmail(parsed.email);
+            setLocalPassword(parsed.password || null);
+            setIsInitialized(true);
+            return;
+          }
+        }
+
+        // No valid pending verification data - redirect to login
+        console.log('[Verify] No pending verification found, redirecting to login');
+        router.replace('/auth/login');
+      } catch (err) {
+        console.error('[Verify] Error loading pending verification:', err);
+        router.replace('/auth/login');
+      }
+    };
+
+    loadPendingVerification();
+  }, []);
 
   // Resend cooldown timer
   useEffect(() => {
@@ -74,8 +109,30 @@ export default function VerifyScreen(): React.ReactElement {
 
   const handleCodeChange = (value: string, index: number): void => {
     // Only allow digits
-    const digit = value.replace(/[^0-9]/g, '').slice(-1);
+    const digitsOnly = value.replace(/[^0-9]/g, '');
 
+    // Handle paste - if we get multiple digits, fill all inputs
+    if (digitsOnly.length > 1) {
+      const pastedCode = digitsOnly.slice(0, CODE_LENGTH).split('');
+      const newCode = Array(CODE_LENGTH).fill('');
+      pastedCode.forEach((digit, i) => {
+        newCode[i] = digit;
+      });
+      setCode(newCode);
+
+      // Focus the next empty input or last input
+      const nextEmptyIndex = newCode.findIndex(d => !d);
+      if (nextEmptyIndex === -1) {
+        // All filled - auto-submit
+        inputRefs.current[CODE_LENGTH - 1]?.blur();
+        handleVerify(newCode.join(''));
+      } else {
+        inputRefs.current[nextEmptyIndex]?.focus();
+      }
+      return;
+    }
+
+    const digit = digitsOnly.slice(-1);
     const newCode = [...code];
     newCode[index] = digit;
     setCode(newCode);
@@ -108,14 +165,20 @@ export default function VerifyScreen(): React.ReactElement {
       return;
     }
 
+    if (!localUsername || !localEmail) {
+      setError('Verification session expired. Please register again.');
+      return;
+    }
+
     setIsLoading(true);
     setError('');
 
     try {
-      await verifyEmail(codeToVerify);
+      // Pass all credentials to auto-login after verification
+      await verifyEmail(codeToVerify, localUsername, localEmail, localPassword || undefined);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Navigate to login - user must sign in after verification
-      router.replace('/auth/login');
+      // Navigate to main app - user is now logged in
+      router.replace('/(tabs)');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Verification failed. Please try again.';
       setError(message);
@@ -131,11 +194,17 @@ export default function VerifyScreen(): React.ReactElement {
   const handleResend = async (): Promise<void> => {
     if (resendCooldown > 0) return;
 
+    if (!localUsername) {
+      setError('Verification session expired. Please register again.');
+      return;
+    }
+
     setIsResending(true);
     setError('');
 
     try {
-      await resendVerificationCode();
+      // Pass localUsername to avoid race condition with React context
+      await resendVerificationCode(localUsername);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setResendCooldown(60); // 60 second cooldown
     } catch (err) {
@@ -147,9 +216,20 @@ export default function VerifyScreen(): React.ReactElement {
     }
   };
 
-  const maskedEmail = verificationEmail
-    ? verificationEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+  const maskedEmail = localEmail
+    ? localEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3')
     : '';
+
+  // Don't render until we've loaded from AsyncStorage
+  if (!isInitialized || !localUsername) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={[styles.content, { justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={styles.subtitle}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -210,10 +290,10 @@ export default function VerifyScreen(): React.ReactElement {
                 onChangeText={(value) => handleCodeChange(value, index)}
                 onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
                 keyboardType="number-pad"
-                maxLength={1}
                 textContentType="oneTimeCode"
                 autoComplete="one-time-code"
                 selectTextOnFocus
+                caretHidden
               />
             ))}
           </View>
@@ -310,12 +390,12 @@ const styles = StyleSheet.create({
     marginBottom: layout.spacing.md,
   },
   codeInput: {
-    width: 48,
-    height: 56,
+    width: 50,
+    height: 60,
     borderWidth: 2,
     borderColor: colors.border,
-    borderRadius: layout.borderRadius.md,
-    fontSize: layout.fontSize.xl,
+    borderRadius: layout.borderRadius.lg,
+    fontSize: layout.fontSize.xxl,
     fontWeight: layout.fontWeight.bold,
     color: colors.textPrimary,
     textAlign: 'center',

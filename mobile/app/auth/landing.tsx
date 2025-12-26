@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,6 +6,7 @@ import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import Svg, { Path } from 'react-native-svg';
 import { TrophyIcon, CoinIcon, StarIcon, TargetIcon } from '@/components/icons';
+import { DevTools } from '@/components/DevTools';
 import { useAuth } from '@/lib/store';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
@@ -67,6 +68,28 @@ function EmailIcon({ size = 20, color = colors.textPrimary }: { size?: number; c
 
 export default function LandingScreen(): React.ReactElement {
   const { loginWithApple, loginWithGoogle } = useAuth();
+  const [showDevTools, setShowDevTools] = useState(false);
+
+  const tapCountRef = useRef(0);
+  const lastTapRef = useRef(0);
+
+  // Triple-tap to open DevTools (dev only)
+  const handleTitlePress = (): void => {
+    if (!__DEV__) return;
+
+    const now = Date.now();
+    if (now - lastTapRef.current < 500) {
+      tapCountRef.current += 1;
+      if (tapCountRef.current >= 3) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setShowDevTools(true);
+        tapCountRef.current = 0;
+      }
+    } else {
+      tapCountRef.current = 1;
+    }
+    lastTapRef.current = now;
+  };
 
   const handleAppleSignIn = async (): Promise<void> => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -113,7 +136,9 @@ export default function LandingScreen(): React.ReactElement {
           <View style={styles.logoIcon}>
             <TrophyIcon size={64} color={colors.primary} />
           </View>
-          <Text style={styles.title}>Sport Sage</Text>
+          <Pressable onPress={handleTitlePress}>
+            <Text style={styles.title}>Sport Sage</Text>
+          </Pressable>
           <Text style={styles.subtitle}>Predict. Win. Compete.</Text>
         </MotiView>
 
@@ -190,6 +215,10 @@ export default function LandingScreen(): React.ReactElement {
           </Pressable>
         </MotiView>
       </View>
+
+      {__DEV__ && (
+        <DevTools visible={showDevTools} onClose={() => setShowDevTools(false)} />
+      )}
     </SafeAreaView>
   );
 }

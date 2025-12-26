@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getDb, users, userStats, transactions, DAILY_TOPUP_AMOUNT } from '@sport-sage/database';
 import { eq, desc, sql } from 'drizzle-orm';
 
@@ -11,7 +11,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function response(statusCode: number, body: unknown): APIGatewayProxyResult {
+function response(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode,
     headers: corsHeaders,
@@ -19,16 +19,17 @@ function response(statusCode: number, body: unknown): APIGatewayProxyResult {
   };
 }
 
-function getCognitoId(event: APIGatewayProxyEvent): string | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (claims?.sub) return claims.sub as string;
-  const jwt = event.requestContext.authorizer?.jwt?.claims;
+function getCognitoId(event: APIGatewayProxyEventV2): string | null {
+  // HTTP API v2 format - JWT authorizer puts claims here
+  const jwt = (event.requestContext as any).authorizer?.jwt?.claims;
   if (jwt?.sub) return jwt.sub as string;
   return null;
 }
 
-export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const { httpMethod, path, queryStringParameters } = event;
+export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  const httpMethod = event.requestContext.http.method;
+  const path = event.rawPath;
+  const queryStringParameters = event.queryStringParameters;
   const route = path.replace(/^\/api\/wallet\/?/, '').replace(/\/$/, '') || '';
 
   const cognitoId = getCognitoId(event);
@@ -71,7 +72,7 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   }
 }
 
-async function handleGetWallet(user: typeof users.$inferSelect): Promise<APIGatewayProxyResult> {
+async function handleGetWallet(user: typeof users.$inferSelect): Promise<APIGatewayProxyResultV2> {
   const statsResult = await db.select().from(userStats).where(eq(userStats.userId, user.id)).limit(1);
   const stats = statsResult[0];
 
@@ -102,7 +103,7 @@ interface GetTransactionsParams {
 async function handleGetTransactions(
   userId: string,
   params: GetTransactionsParams
-): Promise<APIGatewayProxyResult> {
+): Promise<APIGatewayProxyResultV2> {
   const page = Math.max(1, parseInt(params.page || '1', 10));
   const pageSize = Math.min(50, Math.max(1, parseInt(params.pageSize || '20', 10)));
   const offset = (page - 1) * pageSize;
@@ -144,7 +145,7 @@ async function handleGetTransactions(
   });
 }
 
-async function handleTopupStatus(userId: string): Promise<APIGatewayProxyResult> {
+async function handleTopupStatus(userId: string): Promise<APIGatewayProxyResultV2> {
   const statsResult = await db.select().from(userStats).where(eq(userStats.userId, userId)).limit(1);
   const stats = statsResult[0];
 
@@ -166,7 +167,7 @@ async function handleTopupStatus(userId: string): Promise<APIGatewayProxyResult>
   });
 }
 
-async function handleClaimTopup(user: typeof users.$inferSelect): Promise<APIGatewayProxyResult> {
+async function handleClaimTopup(user: typeof users.$inferSelect): Promise<APIGatewayProxyResultV2> {
   const statsResult = await db.select().from(userStats).where(eq(userStats.userId, user.id)).limit(1);
   const stats = statsResult[0];
 
@@ -198,10 +199,11 @@ async function handleClaimTopup(user: typeof users.$inferSelect): Promise<APIGat
     .where(eq(userStats.userId, user.id));
 
   // Create transaction
+  // Note: Using sql template to cast enum values for RDS Data API compatibility
   await db.insert(transactions).values({
     userId: user.id,
-    type: 'daily_topup',
-    currency: 'coins',
+    type: sql`'daily_topup'::transaction_type` as unknown as 'daily_topup',
+    currency: sql`'coins'::currency_type` as unknown as 'coins',
     amount: DAILY_TOPUP_AMOUNT,
     balanceAfter: newCoins,
     description: 'Daily coin top-up',

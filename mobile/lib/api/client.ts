@@ -3,6 +3,14 @@
 import { API_CONFIG } from '../auth/config';
 import { cognitoAuth } from '../auth/cognito';
 
+// Debug logging for development
+const DEBUG = __DEV__;
+const log = (message: string, data?: unknown) => {
+  if (DEBUG) {
+    console.log(`[API] ${message}`, data !== undefined ? data : '');
+  }
+};
+
 export interface ApiResponse<T> {
   data: T;
   pagination?: {
@@ -100,6 +108,8 @@ class HttpClient {
       }
     }
 
+    log(`${fetchOptions.method || 'GET'} ${path}`, { requiresAuth, hasBody: !!body });
+
     // Build headers
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -108,10 +118,13 @@ class HttpClient {
 
     // Add auth token if required
     if (requiresAuth) {
+      log('Getting auth token...');
       const token = await cognitoAuth.getIdToken();
       if (!token) {
+        log('No auth token available - user not authenticated');
         throw this.createError('NotAuthenticated', 'Please sign in to continue', 401);
       }
+      log('Auth token obtained');
       headers['Authorization'] = `Bearer ${token}`;
     }
 
@@ -133,17 +146,21 @@ class HttpClient {
 
         // Handle response
         if (!response.ok) {
+          log(`Request failed: ${response.status} ${response.statusText}`);
           // Handle 401 - try to refresh token once
           if (response.status === 401 && requiresAuth && attempt === 0) {
+            log('Got 401, attempting token refresh...');
             try {
               await cognitoAuth.refreshSession();
               const newToken = await cognitoAuth.getIdToken();
               if (newToken) {
+                log('Token refreshed, retrying request');
                 headers['Authorization'] = `Bearer ${newToken}`;
                 continue; // Retry with new token
               }
             } catch {
               // Refresh failed, throw auth error
+              log('Token refresh failed');
               throw this.createError('SessionExpired', 'Your session has expired. Please sign in again.', 401);
             }
           }
@@ -156,20 +173,25 @@ class HttpClient {
             // Response body not JSON
           }
 
-          throw this.createError(
+          const error = this.createError(
             this.getErrorCode(response.status),
             errorBody.message || errorBody.error || response.statusText,
             response.status
           );
+          log('API error', error);
+          throw error;
         }
 
         // Parse success response
         const contentType = response.headers.get('Content-Type');
         if (contentType?.includes('application/json')) {
-          return await response.json();
+          const data = await response.json();
+          log(`Request successful: ${path}`);
+          return data;
         }
 
         // No content (204) or non-JSON response
+        log(`Request successful (no content): ${path}`);
         return {} as T;
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {

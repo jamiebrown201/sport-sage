@@ -12,6 +12,7 @@ import { StreakIndicator } from '@/components/StreakIndicator';
 import { DailyChallengeCard } from '@/components/DailyChallengeCard';
 import { CoinBurst } from '@/components/animations';
 import { GiftIcon, AlertIcon, FireIcon, UsersIcon, StarIcon, TrophyIcon } from '@/components/icons';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { FriendActivity } from '@/types';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
@@ -55,7 +56,8 @@ export default function HomeScreen(): React.ReactElement {
   const [showCoinBurst, setShowCoinBurst] = useState(false);
 
   const pendingPredictions = getPendingPredictions().slice(0, 2);
-  const upcomingEvents = EVENTS.slice(0, 4);
+  const liveEvents = EVENTS.filter(e => e.status === 'live').slice(0, 3);
+  const upcomingEvents = EVENTS.filter(e => e.status !== 'live').slice(0, 4);
   const activeChallenges = getActiveChallenges().slice(0, 3);
   const recentFriendActivity = friendActivity.slice(0, 4);
   const canTopup = user && stats ? canClaimTopup(user.coins, stats.lastTopupDate) : false;
@@ -221,7 +223,7 @@ export default function HomeScreen(): React.ReactElement {
           <Text style={styles.statLabel}>Wins</Text>
         </Card>
         <Card style={styles.statCard}>
-          <Text style={styles.statValue}>{stats?.winRate.toFixed(0) ?? 0}%</Text>
+          <Text style={styles.statValue}>{(stats?.winRate ?? 0).toFixed(0)}%</Text>
           <Text style={styles.statLabel}>Win Rate</Text>
         </Card>
         <Card style={styles.statCard}>
@@ -336,11 +338,40 @@ export default function HomeScreen(): React.ReactElement {
         </MotiView>
       )}
 
+      {/* Live Events */}
+      {liveEvents.length > 0 && (
+        <MotiView
+          from={{ opacity: 0, translateY: 10 }}
+          animate={{ opacity: 1, translateY: 0 }}
+          transition={{ type: 'timing', duration: 400, delay: 500 }}
+        >
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <LiveIndicator size="md" showText={false} />
+              <Text style={[styles.sectionTitle, styles.liveTitle]}>Live Now</Text>
+            </View>
+            <Link href="/(tabs)/events" asChild>
+              <Pressable>
+                <Text style={styles.seeAll}>See All →</Text>
+              </Pressable>
+            </Link>
+          </View>
+
+          {liveEvents.map((event) => (
+            <EventCard
+              key={event.id}
+              event={event}
+              onPress={() => router.push(`/(tabs)/events/${event.id}`)}
+            />
+          ))}
+        </MotiView>
+      )}
+
       {/* Upcoming Events */}
       <MotiView
         from={{ opacity: 0, translateY: 10 }}
         animate={{ opacity: 1, translateY: 0 }}
-        transition={{ type: 'timing', duration: 400, delay: 500 }}
+        transition={{ type: 'timing', duration: 400, delay: liveEvents.length > 0 ? 550 : 500 }}
       >
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Upcoming Events</Text>
@@ -470,6 +501,9 @@ const styles = StyleSheet.create({
     fontSize: layout.fontSize.lg,
     fontWeight: layout.fontWeight.bold,
     color: colors.textPrimary,
+  },
+  liveTitle: {
+    color: colors.error,
   },
   expiresText: {
     fontSize: layout.fontSize.xs,

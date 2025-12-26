@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Link, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,6 +6,7 @@ import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import { Button, Input } from '@/components/ui';
 import { EyeIcon, EyeOffIcon } from '@/components/icons';
+import { DevTools } from '@/components/DevTools';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
 import { useAuth } from '@/lib/store';
@@ -16,8 +17,30 @@ export default function LoginScreen(): React.ReactElement {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showDevTools, setShowDevTools] = useState(false);
+
+  const tapCountRef = useRef(0);
+  const lastTapRef = useRef(0);
 
   const { login } = useAuth();
+
+  // Triple-tap to open DevTools (dev only)
+  const handleTitlePress = (): void => {
+    if (!__DEV__) return;
+
+    const now = Date.now();
+    if (now - lastTapRef.current < 500) {
+      tapCountRef.current += 1;
+      if (tapCountRef.current >= 3) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setShowDevTools(true);
+        tapCountRef.current = 0;
+      }
+    } else {
+      tapCountRef.current = 1;
+    }
+    lastTapRef.current = now;
+  };
 
   const handleLogin = async (): Promise<void> => {
     if (!email || !password) {
@@ -53,7 +76,9 @@ export default function LoginScreen(): React.ReactElement {
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
 
-          <Text style={styles.title}>Welcome Back</Text>
+          <Pressable onPress={handleTitlePress}>
+            <Text style={styles.title}>Welcome Back</Text>
+          </Pressable>
           <Text style={styles.subtitle}>
             Sign in to continue your predictions
           </Text>
@@ -113,6 +138,10 @@ export default function LoginScreen(): React.ReactElement {
           </View>
         </MotiView>
       </View>
+
+      {__DEV__ && (
+        <DevTools visible={showDevTools} onClose={() => setShowDevTools(false)} />
+      )}
     </SafeAreaView>
   );
 }

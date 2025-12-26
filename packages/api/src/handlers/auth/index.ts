@@ -1,17 +1,17 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getDb, users, userStats, transactions, WELCOME_BONUS_COINS } from '@sport-sage/database';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 const db = getDb();
 
-// CORS headers
+// CORS headers (HTTP API handles CORS, but we include for safety)
 const corsHeaders = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function response(statusCode: number, body: unknown): APIGatewayProxyResult {
+function response(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode,
     headers: corsHeaders,
@@ -19,30 +19,50 @@ function response(statusCode: number, body: unknown): APIGatewayProxyResult {
   };
 }
 
-function getCognitoId(event: APIGatewayProxyEvent): string | null {
-  // The Cognito ID comes from the JWT claims set by API Gateway authorizer
-  const claims = event.requestContext.authorizer?.claims;
+// Decode JWT payload without verification (API Gateway already verified it if authorizer was used)
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = Buffer.from(parts[1], 'base64').toString('utf8');
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function getJwtClaims(event: APIGatewayProxyEventV2): Record<string, unknown> | null {
+  // First try HTTP API v2 authorizer format
+  const authorizerClaims = (event.requestContext as any).authorizer?.jwt?.claims;
+  if (authorizerClaims) return authorizerClaims;
+
+  // If no authorizer (auth routes bypass it), manually decode the JWT from header
+  const authHeader = event.headers?.authorization || event.headers?.Authorization;
+  if (!authHeader) return null;
+
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  if (!token) return null;
+
+  return decodeJwtPayload(token);
+}
+
+function getCognitoId(event: APIGatewayProxyEventV2): string | null {
+  const claims = getJwtClaims(event);
   if (claims?.sub) return claims.sub as string;
-
-  // Also check jwt claims (HTTP API format)
-  const jwt = event.requestContext.authorizer?.jwt?.claims;
-  if (jwt?.sub) return jwt.sub as string;
-
   return null;
 }
 
-function getEmail(event: APIGatewayProxyEvent): string | null {
-  const claims = event.requestContext.authorizer?.claims;
+function getEmail(event: APIGatewayProxyEventV2): string | null {
+  const claims = getJwtClaims(event);
   if (claims?.email) return claims.email as string;
-
-  const jwt = event.requestContext.authorizer?.jwt?.claims;
-  if (jwt?.email) return jwt.email as string;
-
   return null;
 }
 
-export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const { httpMethod, path, pathParameters } = event;
+export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  // HTTP API v2 uses rawPath and requestContext.http.method
+  const httpMethod = event.requestContext.http.method;
+  const path = event.rawPath;
+  const pathParameters = event.pathParameters;
   const route = path.replace(/^\/api\/auth\/?/, '').replace(/\/$/, '') || '';
 
   try {
@@ -78,7 +98,7 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   }
 }
 
-async function handleRegister(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+async function handleRegister(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const cognitoId = getCognitoId(event);
   const email = getEmail(event);
 
@@ -158,10 +178,11 @@ async function handleRegister(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     .returning();
 
   // Create welcome bonus transaction
+  // Note: Using sql template to cast enum values for RDS Data API compatibility
   await db.insert(transactions).values({
     userId: newUser.id,
-    type: 'welcome_bonus',
-    currency: 'coins',
+    type: sql`'welcome_bonus'::transaction_type` as unknown as 'welcome_bonus',
+    currency: sql`'coins'::currency_type` as unknown as 'coins',
     amount: WELCOME_BONUS_COINS,
     balanceAfter: WELCOME_BONUS_COINS,
     description: 'Welcome to Sport Sage! Here are your starting coins.',
@@ -169,12 +190,12 @@ async function handleRegister(event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   return response(201, {
     user: newUser,
-    stats: newStats,
+    stats: formatStats(newStats),
     message: 'Registration successful',
   });
 }
 
-async function handleGetMe(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+async function handleGetMe(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const cognitoId = getCognitoId(event);
 
   if (!cognitoId) {
@@ -192,11 +213,24 @@ async function handleGetMe(event: APIGatewayProxyEvent): Promise<APIGatewayProxy
 
   return response(200, {
     user,
-    stats: statsResult[0] || null,
+    stats: statsResult[0] ? formatStats(statsResult[0]) : null,
   });
 }
 
-async function handleUpdateMe(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+// Transform database stats to include calculated winRate
+function formatStats(stats: typeof userStats.$inferSelect) {
+  const winRate =
+    stats.totalWins + stats.totalLosses > 0
+      ? Math.round((stats.totalWins / (stats.totalWins + stats.totalLosses)) * 100)
+      : 0;
+
+  return {
+    ...stats,
+    winRate,
+  };
+}
+
+async function handleUpdateMe(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
   const cognitoId = getCognitoId(event);
 
   if (!cognitoId) {
@@ -236,11 +270,11 @@ async function handleUpdateMe(event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   return response(200, {
     user: updated,
-    stats: statsResult[0] || null,
+    stats: statsResult[0] ? formatStats(statsResult[0]) : null,
   });
 }
 
-async function handleCheckUsername(username: string): Promise<APIGatewayProxyResult> {
+async function handleCheckUsername(username: string): Promise<APIGatewayProxyResultV2> {
   if (!username || username.length < 3 || username.length > 20) {
     return response(400, { error: 'Username must be between 3 and 20 characters' });
   }

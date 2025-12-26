@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   getDb,
   users,
@@ -20,7 +20,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function response(statusCode: number, body: unknown): APIGatewayProxyResult {
+function response(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return {
     statusCode,
     headers: corsHeaders,
@@ -28,16 +28,18 @@ function response(statusCode: number, body: unknown): APIGatewayProxyResult {
   };
 }
 
-function getCognitoId(event: APIGatewayProxyEvent): string | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (claims?.sub) return claims.sub as string;
-  const jwt = event.requestContext.authorizer?.jwt?.claims;
+function getCognitoId(event: APIGatewayProxyEventV2): string | null {
+  // HTTP API v2 format - JWT authorizer puts claims here
+  const jwt = (event.requestContext as any).authorizer?.jwt?.claims;
   if (jwt?.sub) return jwt.sub as string;
   return null;
 }
 
-export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  const { httpMethod, path, pathParameters, queryStringParameters } = event;
+export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
+  const httpMethod = event.requestContext.http.method;
+  const path = event.rawPath;
+  const pathParameters = event.pathParameters;
+  const queryStringParameters = event.queryStringParameters;
   const route = path.replace(/^\/api\/predictions\/?/, '').replace(/\/$/, '') || '';
 
   const cognitoId = getCognitoId(event);
@@ -88,9 +90,9 @@ interface CreatePredictionBody {
 }
 
 async function handleCreatePrediction(
-  event: APIGatewayProxyEvent,
+  event: APIGatewayProxyEventV2,
   user: typeof users.$inferSelect
-): Promise<APIGatewayProxyResult> {
+): Promise<APIGatewayProxyResultV2> {
   let body: CreatePredictionBody;
   try {
     body = event.body ? JSON.parse(event.body) : {};
@@ -187,10 +189,11 @@ async function handleCreatePrediction(
     .returning();
 
   // Create transaction record
+  // Note: Using sql template to cast enum values for RDS Data API compatibility
   await db.insert(transactions).values({
     userId: user.id,
-    type: 'prediction_stake',
-    currency: 'coins',
+    type: sql`'prediction_stake'::transaction_type` as unknown as 'prediction_stake',
+    currency: sql`'coins'::currency_type` as unknown as 'coins',
     amount: -stake,
     balanceAfter: newCoins,
     description: `Prediction on ${eventData.homeTeamName || eventData.player1Name} vs ${eventData.awayTeamName || eventData.player2Name}`,
@@ -254,7 +257,7 @@ interface ListPredictionsParams {
 async function handleListPredictions(
   userId: string,
   params: ListPredictionsParams
-): Promise<APIGatewayProxyResult> {
+): Promise<APIGatewayProxyResultV2> {
   const page = Math.max(1, parseInt(params.page || '1', 10));
   const pageSize = Math.min(50, Math.max(1, parseInt(params.pageSize || '20', 10)));
   const offset = (page - 1) * pageSize;
@@ -337,7 +340,7 @@ async function handleListPredictions(
   });
 }
 
-async function handleGetStats(userId: string): Promise<APIGatewayProxyResult> {
+async function handleGetStats(userId: string): Promise<APIGatewayProxyResultV2> {
   const statsResult = await db.select().from(userStats).where(eq(userStats.userId, userId)).limit(1);
 
   if (statsResult.length === 0) {
@@ -371,7 +374,7 @@ async function handleGetStats(userId: string): Promise<APIGatewayProxyResult> {
   });
 }
 
-async function handleGetPrediction(predictionId: string, userId: string): Promise<APIGatewayProxyResult> {
+async function handleGetPrediction(predictionId: string, userId: string): Promise<APIGatewayProxyResultV2> {
   // Validate UUID format
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(predictionId)) {

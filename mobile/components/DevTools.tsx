@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Modal, ScrollView, Alert } from 'react-native';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import { useAuth, usePredictions } from '@/lib/store';
@@ -16,7 +16,7 @@ interface DevToolsProps {
 }
 
 export function DevTools({ visible, onClose }: DevToolsProps): React.ReactElement {
-  const { user, stats, updateUser, updateStats } = useAuth();
+  const { user, stats, updateUser, updateStats, resetAllData } = useAuth();
   const { predictions, updatePrediction, getPendingPredictions } = usePredictions();
 
   const [showCelebration, setShowCelebration] = useState(false);
@@ -122,6 +122,31 @@ export function DevTools({ visible, onClose }: DevToolsProps): React.ReactElemen
       });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
+  };
+
+  const handleResetAllData = (): void => {
+    Alert.alert(
+      'Reset All Data',
+      'This will clear all local data including onboarding state, auth tokens, and cached user data. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              await resetAllData();
+              onClose();
+              // The app will now redirect to onboarding since hasCompletedOnboarding is reset
+            } catch (error) {
+              console.error('Failed to reset data:', error);
+              Alert.alert('Error', 'Failed to reset data. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -244,6 +269,20 @@ export function DevTools({ visible, onClose }: DevToolsProps): React.ReactElemen
               variant="secondary"
             />
           </Card>
+
+          {/* Reset Data */}
+          <Text style={styles.sectionTitle}>Debug</Text>
+          <Card style={styles.card}>
+            <Text style={styles.debugText}>
+              Clear all local data (AsyncStorage + SecureStore) to test fresh onboarding/registration flow.
+            </Text>
+            <Button
+              title="Reset All Data"
+              onPress={handleResetAllData}
+              variant="outline"
+              style={styles.dangerButton}
+            />
+          </Card>
         </ScrollView>
 
         {/* Win Celebration Modal */}
@@ -351,5 +390,13 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     padding: layout.spacing.md,
+  },
+  debugText: {
+    fontSize: layout.fontSize.sm,
+    color: colors.textSecondary,
+    marginBottom: layout.spacing.md,
+  },
+  dangerButton: {
+    borderColor: colors.error,
   },
 });

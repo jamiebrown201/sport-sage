@@ -75,7 +75,7 @@ const SLIDES: OnboardingSlide[] = [
     iconColor: colors.stars,
     title: 'Win Stars, Climb Ranks',
     description:
-      'When you win, you earn Stars based on your profit. Stars measure your skill and determine your leaderboard ranking.',
+      'When you win, you earn Stars based on your profit. Climb the leaderboard and spend Stars on exclusive avatar frames, card skins, merchandise, and more!',
     highlight: {
       iconType: 'star',
       label: 'Stars = Profit Earned',
@@ -84,19 +84,6 @@ const SLIDES: OnboardingSlide[] = [
   },
   {
     id: '5',
-    iconType: 'gem',
-    iconColor: colors.gems,
-    title: 'Gems for Cosmetics',
-    description:
-      'Purchase Gems to unlock exclusive cosmetics like avatar frames, card skins, and victory animations. Show off your style!',
-    highlight: {
-      iconType: 'gem',
-      label: 'Unlock Exclusive Items',
-      color: colors.gems,
-    },
-  },
-  {
-    id: '6',
     iconType: 'sparkle',
     iconColor: colors.success,
     title: 'Ready to Play?',
@@ -162,10 +149,9 @@ export default function OnboardingScreen(): React.ReactElement {
   const renderSlide = ({ item, index }: { item: OnboardingSlide; index: number }): React.ReactElement => (
     <View style={styles.slide}>
       <MotiView
-        from={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ type: 'spring', damping: 15, delay: 100 }}
-        key={`icon-${index}-${currentIndex === index}`}
+        from={{ opacity: 0, translateY: -20 }}
+        animate={{ opacity: 1, translateY: 0 }}
+        transition={{ type: 'timing', duration: 500 }}
         style={styles.slideIconContainer}
       >
         {getSlideIcon(item.iconType, item.iconColor, 80)}
@@ -174,8 +160,7 @@ export default function OnboardingScreen(): React.ReactElement {
       <MotiView
         from={{ opacity: 0, translateY: 20 }}
         animate={{ opacity: 1, translateY: 0 }}
-        transition={{ type: 'timing', duration: 400, delay: 200 }}
-        key={`content-${index}-${currentIndex === index}`}
+        transition={{ type: 'timing', duration: 500, delay: 150 }}
       >
         <Text style={styles.slideTitle}>{item.title}</Text>
         <Text style={styles.slideDescription}>{item.description}</Text>
@@ -185,9 +170,8 @@ export default function OnboardingScreen(): React.ReactElement {
         <MotiView
           from={{ opacity: 0, translateY: 20 }}
           animate={{ opacity: 1, translateY: 0 }}
-          transition={{ type: 'timing', duration: 400, delay: 400 }}
+          transition={{ type: 'timing', duration: 500, delay: 300 }}
           style={[styles.highlightBox, { borderColor: item.highlight.color }]}
-          key={`highlight-${index}-${currentIndex === index}`}
         >
           <View style={styles.highlightIconContainer}>
             {getSlideIcon(item.highlight.iconType, item.highlight.color, 28)}

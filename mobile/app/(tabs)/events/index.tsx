@@ -19,8 +19,8 @@ import {
   SearchIcon,
   CloseIcon,
   UsersIcon,
-  LiveIcon,
 } from '@/components/icons';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { colors } from '@/constants/colors';
 import { layout } from '@/constants/layout';
 import { Badge } from '@/components/ui';
@@ -190,8 +190,8 @@ export default function EventsScreen(): React.ReactElement {
             transition={{ type: 'timing', duration: 300 }}
           >
             <View style={styles.sectionHeader}>
-              <LiveIcon size={16} color={colors.error} />
-              <Text style={[styles.sectionTitle, { color: colors.error }]}>Live Now</Text>
+              <LiveIndicator size="md" showText={false} />
+              <Text style={[styles.sectionTitle, styles.liveTitle]}>Live Now</Text>
             </View>
             {liveEvents.map((event) => (
               <EventCard
@@ -401,6 +401,11 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginBottom: layout.spacing.md,
     marginTop: layout.spacing.md,
+  },
+  liveTitle: {
+    color: colors.error,
+    marginBottom: 0,
+    marginTop: 0,
   },
   emptyState: {
     alignItems: 'center',

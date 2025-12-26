@@ -699,8 +699,8 @@ export interface AuthContextType {
   // Auth methods
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
-  verifyEmail: (code: string) => Promise<void>;
-  resendVerificationCode: () => Promise<void>;
+  verifyEmail: (code: string, username?: string, email?: string, password?: string) => Promise<void>;
+  resendVerificationCode: (username?: string) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   confirmForgotPassword: (code: string, newPassword: string) => Promise<void>;
   loginWithApple: () => Promise<void>;
@@ -711,6 +711,7 @@ export interface AuthContextType {
   updateStats: (updates: Partial<UserStats>) => void;
   completeOnboarding: () => Promise<void>;
   clearAuthError: () => void;
+  resetAllData: () => Promise<void>;
 }
 
 // ============================================================================

@@ -40,6 +40,14 @@ import {
 import { cognitoAuth, CognitoErrorCodes, getErrorMessage } from './auth/cognito';
 import * as api from './api';
 
+// Debug logging for development
+const DEBUG = __DEV__;
+const log = (message: string, data?: unknown) => {
+  if (DEBUG) {
+    console.log(`[Store] ${message}`, data !== undefined ? data : '');
+  }
+};
+
 // ============================================================================
 // AUTH CONTEXT
 // ============================================================================
@@ -60,6 +68,7 @@ const STORAGE_KEYS = {
   SETTINGS: '@sport_sage_settings',
   STREAK_SHIELDS: '@sport_sage_streak_shields',
   REFERRALS: '@sport_sage_referrals',
+  PENDING_VERIFICATION: '@sport_sage_pending_verification',
 };
 
 interface AuthProviderProps {
@@ -76,6 +85,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   const [pendingVerification, setPendingVerification] = useState(false);
   const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
   const [pendingUsername, setPendingUsername] = useState<string | null>(null);
+  const [pendingPassword, setPendingPassword] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   // Password reset flow
   const [pendingPasswordReset, setPendingPasswordReset] = useState(false);
@@ -86,37 +96,60 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   }, []);
 
   const loadStoredUser = async (): Promise<void> => {
+    log('loadStoredUser called');
     try {
       const onboardingComplete = await AsyncStorage.getItem(STORAGE_KEYS.ONBOARDING_COMPLETE);
       setHasCompletedOnboarding(onboardingComplete === 'true');
+      log('Onboarding complete:', onboardingComplete);
+
+      // Check for pending verification (user registered but not yet verified)
+      const pendingVerificationData = await AsyncStorage.getItem(STORAGE_KEYS.PENDING_VERIFICATION);
+      if (pendingVerificationData) {
+        try {
+          const { username, email, pending } = JSON.parse(pendingVerificationData);
+          if (pending) {
+            log('Found pending verification', { username, email });
+            setPendingVerification(true);
+            setPendingUsername(username);
+            setVerificationEmail(email);
+          }
+        } catch {
+          // Invalid data, ignore
+        }
+      }
 
       // Check for existing Cognito session
+      log('Checking for existing Cognito session...');
       const session = await cognitoAuth.getSession();
       if (session) {
+        log('Found valid session, fetching user data from API...');
         // We have a valid session, fetch user data from API
         try {
           const { user: userData, stats: userStats } = await api.getMe();
+          log('User data fetched successfully', { userId: userData.id });
           setUser(userData as User);
           setStats(userStats as UserStats);
           await saveUser(userData as User, userStats as UserStats);
         } catch (error) {
           // Session exists but user not in DB (shouldn't happen, but handle it)
+          log('Session exists but failed to fetch user', error);
           console.error('Session exists but failed to fetch user:', error);
           await cognitoAuth.signOut();
         }
       } else {
-        // No session, check for cached user (for offline support)
-        const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.USER);
-        const storedStats = await AsyncStorage.getItem(STORAGE_KEYS.STATS);
-        if (storedUser) {
-          setUser(JSON.parse(storedUser));
-          setStats(storedStats ? JSON.parse(storedStats) : null);
-        }
+        log('No valid session found - user not authenticated');
+        // No valid session means user needs to log in
+        // Don't load cached user as they can't make API calls anyway
+        // Clear any stale cached data
+        setUser(null);
+        setStats(null);
       }
     } catch (error) {
+      log('Failed to load user', error);
       console.error('Failed to load user:', error);
     } finally {
       setIsLoading(false);
+      log('loadStoredUser complete, isLoading=false');
     }
   };
 
@@ -135,30 +168,39 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   };
 
   const login = useCallback(async (email: string, password: string): Promise<void> => {
+    log('login called', { email });
     setAuthError(null);
     try {
       // Sign in with Cognito
+      log('Signing in with Cognito...');
       await cognitoAuth.signIn(email, password);
+      log('Cognito sign-in successful');
 
       // Try to fetch user data from API
       try {
+        log('Fetching user data from API...');
         const { user: userData, stats: userStats } = await api.getMe();
+        log('User data fetched', { userId: userData.id });
         setUser(userData as User);
         setStats(userStats as UserStats);
         await saveUser(userData as User, userStats as UserStats);
       } catch (apiError) {
+        log('getMe failed', apiError);
         // If user doesn't exist in DB (404), create them
         // This happens on first login after email verification
         if (api.isApiError(apiError) && apiError.statusCode === 404) {
+          log('User not in DB (404), registering...');
           // Get username from Cognito attributes
           const session = await cognitoAuth.getSession();
           const payload = session?.getIdToken().payload as Record<string, string> | undefined;
           const username = payload?.['custom:username'] ||
                            payload?.['preferred_username'] ||
                            email.split('@')[0];
+          log('Got username from token', { username });
 
           // Register user in database
           const { user: userData, stats: userStats } = await api.register(username);
+          log('User registered in DB', { userId: userData.id });
           setUser(userData as User);
           setStats(userStats as UserStats);
           await saveUser(userData as User, userStats as UserStats);
@@ -168,6 +210,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
       }
     } catch (error) {
       const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      log('login error', { message, error });
       setAuthError(message);
       // Sign out if login failed
       try {
@@ -178,61 +221,115 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   }, []);
 
   const register = useCallback(async (username: string, email: string, password: string): Promise<void> => {
+    log('register called', { username, email });
     setAuthError(null);
     try {
       // Sign up with Cognito - this sends verification email
+      log('Calling Cognito signUp...');
       await cognitoAuth.signUp({ email, password, username });
+      log('Cognito signUp successful, verification email sent');
 
-      // Store pending registration state
+      // Store pending registration state - persist to AsyncStorage for verify screen
+      const pendingData = { username, email, password, pending: true };
+      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_VERIFICATION, JSON.stringify(pendingData));
       setPendingVerification(true);
       setVerificationEmail(email);
       setPendingUsername(username);
+      setPendingPassword(password);
+      log('Pending verification state set and persisted');
     } catch (error) {
       const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      log('register error', { message, error });
       setAuthError(message);
       throw new Error(message);
     }
   }, []);
 
   // Verify email after registration
-  const verifyEmail = useCallback(async (code: string): Promise<void> => {
-    if (!verificationEmail) {
+  // Accepts optional parameters to avoid race condition with context state
+  const verifyEmail = useCallback(async (
+    code: string,
+    usernameOverride?: string,
+    emailOverride?: string,
+    passwordOverride?: string
+  ): Promise<void> => {
+    const username = usernameOverride || pendingUsername;
+    const email = emailOverride || verificationEmail;
+    const password = passwordOverride || pendingPassword;
+
+    if (!username) {
       throw new Error('No pending verification');
     }
 
+    log('verifyEmail called', { username });
     setAuthError(null);
     try {
-      // Confirm signup with Cognito
-      await cognitoAuth.confirmSignUp(verificationEmail, code);
+      // Confirm signup with Cognito using the username (not email)
+      await cognitoAuth.confirmSignUp(username, code);
+      log('Email verified successfully');
 
-      // User is now confirmed in Cognito
-      // They need to log in manually - the DB user will be created on first login
-      // via the /api/auth/me endpoint (which calls register if user doesn't exist)
+      // Clear pending verification data
+      await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_VERIFICATION);
       setPendingVerification(false);
       setVerificationEmail(null);
       setPendingUsername(null);
+      setPendingPassword(null);
+
+      // Auto-login after successful verification
+      if (email && password) {
+        log('Auto-logging in after verification...');
+        await cognitoAuth.signIn(email, password);
+        log('Auto-login successful, fetching user data...');
+
+        // Fetch or create user in database
+        try {
+          const { user: userData, stats: userStats } = await api.getMe();
+          log('User data fetched', { userId: userData.id });
+          setUser(userData as User);
+          setStats(userStats as UserStats);
+          await saveUser(userData as User, userStats as UserStats);
+        } catch (apiError) {
+          // User doesn't exist in DB yet, register them
+          if (api.isApiError(apiError) && apiError.statusCode === 404) {
+            log('User not in DB, registering...');
+            const { user: userData, stats: userStats } = await api.register(username);
+            log('User registered in DB', { userId: userData.id });
+            setUser(userData as User);
+            setStats(userStats as UserStats);
+            await saveUser(userData as User, userStats as UserStats);
+          } else {
+            throw apiError;
+          }
+        }
+      }
     } catch (error) {
       const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      log('verifyEmail error', { message, error });
       setAuthError(message);
       throw new Error(message);
     }
-  }, [verificationEmail]);
+  }, [pendingUsername, verificationEmail, pendingPassword]);
 
   // Resend verification code
-  const resendVerificationCode = useCallback(async (): Promise<void> => {
-    if (!verificationEmail) {
+  // Accepts optional username parameter to avoid race condition with context state
+  const resendVerificationCode = useCallback(async (usernameOverride?: string): Promise<void> => {
+    const username = usernameOverride || pendingUsername;
+    if (!username) {
       throw new Error('No pending verification');
     }
 
+    log('resendVerificationCode called', { username });
     setAuthError(null);
     try {
-      await cognitoAuth.resendConfirmationCode(verificationEmail);
+      await cognitoAuth.resendConfirmationCode(username);
+      log('Verification code resent');
     } catch (error) {
       const message = getErrorMessage(error as Parameters<typeof getErrorMessage>[0]);
+      log('resendVerificationCode error', { message, error });
       setAuthError(message);
       throw new Error(message);
     }
-  }, [verificationEmail]);
+  }, [pendingUsername]);
 
   // Forgot password - request reset code
   const forgotPassword = useCallback(async (email: string): Promise<void> => {
@@ -308,6 +405,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
     setPendingVerification(false);
     setVerificationEmail(null);
     setPendingUsername(null);
+    setPendingPassword(null);
     setPendingPasswordReset(false);
     setPasswordResetEmail(null);
     setAuthError(null);
@@ -318,9 +416,41 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
         STORAGE_KEYS.STATS,
         STORAGE_KEYS.PREDICTIONS,
         STORAGE_KEYS.TRANSACTIONS,
+        STORAGE_KEYS.PENDING_VERIFICATION,
       ]);
     } catch (error) {
       console.error('Failed to clear storage:', error);
+    }
+  }, []);
+
+  // Full reset for testing - clears everything including onboarding state
+  const resetAllData = useCallback(async (): Promise<void> => {
+    log('resetAllData called - clearing all data');
+    try {
+      // Sign out from Cognito
+      await cognitoAuth.signOut();
+    } catch (error) {
+      console.error('Failed to sign out from Cognito:', error);
+    }
+
+    // Clear ALL in-memory state including onboarding
+    setUser(null);
+    setStats(null);
+    setHasCompletedOnboarding(false);
+    setPendingVerification(false);
+    setVerificationEmail(null);
+    setPendingUsername(null);
+    setPendingPassword(null);
+    setPendingPasswordReset(false);
+    setPasswordResetEmail(null);
+    setAuthError(null);
+
+    // Clear ALL AsyncStorage
+    try {
+      await AsyncStorage.clear();
+      log('AsyncStorage cleared');
+    } catch (error) {
+      console.error('Failed to clear AsyncStorage:', error);
     }
   }, []);
 
@@ -371,6 +501,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
     updateStats,
     completeOnboarding,
     clearAuthError,
+    resetAllData,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
