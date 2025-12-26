@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getDb, events, markets, outcomes, sports } from '@sport-sage/database';
-import { eq, and, gte, lte, desc, asc, sql } from 'drizzle-orm';
+import { eq, and, gte, lte, desc, asc, sql, SQL } from 'drizzle-orm';
 
 const db = getDb();
 
@@ -90,11 +90,11 @@ async function handleListEvents(params: ListEventsParams): Promise<APIGatewayPro
     }
   }
 
-  // Filter by status
+  // Filter by status (cast to event_status enum for RDS Data API)
   if (params.status) {
     const validStatuses = ['scheduled', 'live', 'finished', 'cancelled', 'postponed'];
     if (validStatuses.includes(params.status)) {
-      conditions.push(eq(events.status, params.status as any));
+      conditions.push(sql`${events.status} = ${params.status}::event_status`);
     }
   }
 
@@ -155,14 +155,14 @@ async function handleListSports(): Promise<APIGatewayProxyResultV2> {
     .where(eq(sports.isActive, true))
     .orderBy(asc(sports.sortOrder));
 
-  // Get event counts per sport
+  // Get event counts per sport (cast enum for RDS Data API)
   const countsResult = await db
     .select({
       sportId: events.sportId,
       count: sql<number>`count(*)::int`,
     })
     .from(events)
-    .where(eq(events.status, 'scheduled'))
+    .where(sql`${events.status} = 'scheduled'::event_status`)
     .groupBy(events.sportId);
 
   const countsBySport = new Map(countsResult.map((c) => [c.sportId, c.count]));
@@ -182,7 +182,7 @@ async function handleFeaturedEvents(): Promise<APIGatewayProxyResultV2> {
   const featured = await db.query.events.findMany({
     where: and(
       eq(events.isFeatured, true),
-      eq(events.status, 'scheduled')
+      sql`${events.status} = 'scheduled'::event_status`
     ),
     with: {
       sport: true,
@@ -201,7 +201,7 @@ async function handleFeaturedEvents(): Promise<APIGatewayProxyResultV2> {
   // If no featured events, return upcoming events with high prediction counts
   if (featured.length === 0) {
     const popular = await db.query.events.findMany({
-      where: eq(events.status, 'scheduled'),
+      where: sql`${events.status} = 'scheduled'::event_status`,
       with: {
         sport: true,
         competition: true,

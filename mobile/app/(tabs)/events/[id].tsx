@@ -1,11 +1,12 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
-import { getEventById, getEventTitle } from '@/lib/mock-data';
+import { getEventTitle } from '@/lib/mock-data';
 import { useAuth, usePredictions, useAccumulator, useFriends } from '@/lib/store';
+import { useEventsStore } from '@/lib/stores/events';
 import { Outcome, ACCUMULATOR_LIMITS } from '@/types';
 import { Card, Badge, Button } from '@/components/ui';
 import { PredictionSlip } from '@/components/PredictionSlip';
@@ -56,7 +57,6 @@ function getSportIcon(slug: string, size: number, color: string): React.ReactEle
 
 export default function EventDetailScreen(): React.ReactElement {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const event = id ? getEventById(id) : undefined;
   const { user } = useAuth();
   const { createPrediction } = usePredictions();
   const { getFriendPredictionsForEvent } = useFriends();
@@ -67,6 +67,15 @@ export default function EventDetailScreen(): React.ReactElement {
     getSelectedOutcome,
     currentSelections,
   } = useAccumulator();
+
+  // Fetch event from API
+  const { selectedEvent: event, fetchEventById, isLoading } = useEventsStore();
+
+  useEffect(() => {
+    if (id) {
+      fetchEventById(id);
+    }
+  }, [id]);
 
   // Get friend predictions for this event
   const friendPredictions = id ? getFriendPredictionsForEvent(id) : [];
@@ -130,6 +139,18 @@ export default function EventDetailScreen(): React.ReactElement {
       setIsPlacing(false);
     }
   }, [event, selectedOutcome, user, createPrediction]);
+
+  // Show loading state
+  if (isLoading && !event) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorState}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.errorText}>Loading event...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!event) {
     return (

@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, RefreshControl } from 'react-native';
+import React, { useState, useMemo, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, RefreshControl, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { MotiView } from 'moti';
-import { EVENTS, SPORTS } from '@/lib/mock-data';
 import { useFriends } from '@/lib/store';
+import { useEventsStore } from '@/lib/stores/events';
 import { EventCard } from '@/components/EventCard';
 import {
   CalendarIcon,
@@ -50,12 +50,30 @@ function getSportIcon(slug: string | null, size: number, color: string): React.R
 }
 
 export default function EventsScreen(): React.ReactElement {
-  const [selectedSport, setSelectedSport] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
 
-  const { friendPredictions, getFriendPredictionsForEvent } = useFriends();
+  const { friendPredictions } = useFriends();
+
+  // Events store
+  const {
+    events,
+    sports,
+    selectedSport,
+    isLoading,
+    isRefreshing,
+    total,
+    fetchEvents,
+    refreshEvents,
+    fetchSports,
+    setSelectedSport,
+  } = useEventsStore();
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchEvents();
+    fetchSports();
+  }, []);
 
   // Count friends betting per event
   const friendCountByEvent = useMemo(() => {
@@ -66,47 +84,39 @@ export default function EventsScreen(): React.ReactElement {
     return counts;
   }, [friendPredictions]);
 
-  // Filter events
+  // Filter events by search query (API already handles sport filter)
   const filteredEvents = useMemo(() => {
-    let events = EVENTS;
+    if (!searchQuery.trim()) return events;
 
-    // Filter by sport
-    if (selectedSport) {
-      events = events.filter((e) => e.sport.slug === selectedSport);
-    }
-
-    // Filter by search query
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      events = events.filter((e) => {
-        const teams = [e.homeTeam, e.awayTeam, e.player1, e.player2]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        const competition = e.competition.toLowerCase();
-        return teams.includes(query) || competition.includes(query);
-      });
-    }
-
-    return events;
-  }, [selectedSport, searchQuery]);
+    const query = searchQuery.toLowerCase();
+    return events.filter((e) => {
+      const teams = [e.homeTeam, e.awayTeam, e.player1, e.player2]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const competition = e.competition.toLowerCase();
+      return teams.includes(query) || competition.includes(query);
+    });
+  }, [events, searchQuery]);
 
   // Group events by date
   const today = new Date().toDateString();
   const todayEvents = filteredEvents.filter(
-    (e) => new Date(e.startTime).toDateString() === today
+    (e) => new Date(e.startTime).toDateString() === today && e.status !== 'live'
   );
   const futureEvents = filteredEvents.filter(
-    (e) => new Date(e.startTime).toDateString() !== today
+    (e) => new Date(e.startTime).toDateString() !== today && e.status !== 'live'
   );
 
   // Live events
   const liveEvents = filteredEvents.filter((e) => e.status === 'live');
 
   const onRefresh = async (): Promise<void> => {
-    setRefreshing(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setRefreshing(false);
+    await refreshEvents();
+  };
+
+  const handleSportSelect = (sportSlug: string | null): void => {
+    setSelectedSport(sportSlug);
   };
 
   return (
@@ -155,22 +165,19 @@ export default function EventsScreen(): React.ReactElement {
             label="All"
             sportSlug={null}
             selected={selectedSport === null}
-            onPress={() => setSelectedSport(null)}
-            count={EVENTS.length}
+            onPress={() => handleSportSelect(null)}
+            count={total}
           />
-          {SPORTS.map((sport) => {
-            const count = EVENTS.filter(e => e.sport.slug === sport.slug).length;
-            return (
-              <SportFilterChip
-                key={sport.id}
-                label={sport.name}
-                sportSlug={sport.slug}
-                selected={selectedSport === sport.slug}
-                onPress={() => setSelectedSport(sport.slug)}
-                count={count}
-              />
-            );
-          })}
+          {sports.map((sport) => (
+            <SportFilterChip
+              key={sport.id}
+              label={sport.name}
+              sportSlug={sport.slug}
+              selected={selectedSport === sport.slug}
+              onPress={() => handleSportSelect(sport.slug)}
+              count={sport.eventCount}
+            />
+          ))}
         </ScrollView>
       </View>
 
@@ -179,7 +186,7 @@ export default function EventsScreen(): React.ReactElement {
         style={styles.eventsList}
         contentContainerStyle={styles.eventsContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+          <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
       >
         {/* Live Events */}
@@ -242,8 +249,16 @@ export default function EventsScreen(): React.ReactElement {
           </MotiView>
         )}
 
+        {/* Loading State */}
+        {isLoading && filteredEvents.length === 0 && (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.emptyText}>Loading events...</Text>
+          </View>
+        )}
+
         {/* Empty State */}
-        {filteredEvents.length === 0 && (
+        {!isLoading && filteredEvents.length === 0 && (
           <View style={styles.emptyState}>
             <TargetIcon size={48} color={colors.textMuted} />
             <Text style={styles.emptyText}>No events found</Text>

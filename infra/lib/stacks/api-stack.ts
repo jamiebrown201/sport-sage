@@ -115,9 +115,10 @@ export class ApiStack extends cdk.Stack {
         handlers[name]
       );
 
-      // Auth and monitoring endpoints don't require authorization
+      // Auth, events, monitoring endpoints don't require authorization
+      // Events is read-only public data
       // TODO: Add admin auth for monitoring in production
-      const needsAuth = name !== 'auth' && name !== 'monitoring';
+      const needsAuth = name !== 'auth' && name !== 'events' && name !== 'monitoring';
 
       this.api.addRoutes({
         path: `/api/${name}`,

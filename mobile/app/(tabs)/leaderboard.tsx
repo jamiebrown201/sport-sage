@@ -5,6 +5,7 @@ import { LEADERBOARD } from '@/lib/mock-data';
 import { useFriends } from '@/lib/store';
 import { LeaderboardEntry, Friend, FriendActivity } from '@/types';
 import { Card, Badge, Button } from '@/components/ui';
+import { ComingSoonBadge } from '@/components/ComingSoon';
 import {
   StarIcon,
   TrophyIcon,
@@ -98,6 +99,14 @@ export default function LeaderboardScreen(): React.ReactElement {
             </View>
           )}
         </Pressable>
+      </View>
+
+      {/* Demo Data Notice */}
+      <View style={styles.demoNotice}>
+        <ComingSoonBadge size="sm" />
+        <Text style={styles.demoNoticeText}>
+          Showing preview data. Real leaderboard coming soon!
+        </Text>
       </View>
 
       {viewType === 'global' ? (
@@ -536,6 +545,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: layout.spacing.sm,
     marginBottom: layout.spacing.md,
+  },
+  demoNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: layout.spacing.sm,
+    backgroundColor: colors.primaryDim,
+    borderRadius: layout.borderRadius.md,
+    paddingVertical: layout.spacing.sm,
+    paddingHorizontal: layout.spacing.md,
+    marginBottom: layout.spacing.md,
+  },
+  demoNoticeText: {
+    flex: 1,
+    fontSize: layout.fontSize.xs,
+    color: colors.textSecondary,
   },
   toggleButton: {
     flex: 1,

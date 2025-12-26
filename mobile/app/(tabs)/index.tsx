@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image, ActivityIndicator } from 'react-native';
 import { Link, router } from 'expo-router';
 import { MotiView } from 'moti';
 import * as Haptics from 'expo-haptics';
 import { useAuth, usePredictions, useChallenges, useFriends } from '@/lib/store';
-import { EVENTS, canClaimTopup } from '@/lib/mock-data';
+import { useEventsStore } from '@/lib/stores/events';
+import { canClaimTopup } from '@/lib/mock-data';
 import { Card, Button, Badge } from '@/components/ui';
 import { EventCard } from '@/components/EventCard';
 import { PredictionCard } from '@/components/PredictionCard';
@@ -55,9 +56,24 @@ export default function HomeScreen(): React.ReactElement {
   const { friendActivity } = useFriends();
   const [showCoinBurst, setShowCoinBurst] = useState(false);
 
+  // Real events from API
+  const {
+    liveEvents,
+    scheduledEvents,
+    isLoading: eventsLoading,
+    fetchLiveEvents,
+    fetchScheduledEvents,
+  } = useEventsStore();
+
+  // Fetch events on mount
+  useEffect(() => {
+    fetchLiveEvents();
+    fetchScheduledEvents();
+  }, []);
+
   const pendingPredictions = getPendingPredictions().slice(0, 2);
-  const liveEvents = EVENTS.filter(e => e.status === 'live').slice(0, 3);
-  const upcomingEvents = EVENTS.filter(e => e.status !== 'live').slice(0, 4);
+  const upcomingEvents = scheduledEvents.slice(0, 4);
+  const displayLiveEvents = liveEvents.slice(0, 3);
   const activeChallenges = getActiveChallenges().slice(0, 3);
   const recentFriendActivity = friendActivity.slice(0, 4);
   const canTopup = user && stats ? canClaimTopup(user.coins, stats.lastTopupDate) : false;
@@ -339,7 +355,7 @@ export default function HomeScreen(): React.ReactElement {
       )}
 
       {/* Live Events */}
-      {liveEvents.length > 0 && (
+      {displayLiveEvents.length > 0 && (
         <MotiView
           from={{ opacity: 0, translateY: 10 }}
           animate={{ opacity: 1, translateY: 0 }}
@@ -357,7 +373,7 @@ export default function HomeScreen(): React.ReactElement {
             </Link>
           </View>
 
-          {liveEvents.map((event) => (
+          {displayLiveEvents.map((event) => (
             <EventCard
               key={event.id}
               event={event}
@@ -371,7 +387,7 @@ export default function HomeScreen(): React.ReactElement {
       <MotiView
         from={{ opacity: 0, translateY: 10 }}
         animate={{ opacity: 1, translateY: 0 }}
-        transition={{ type: 'timing', duration: 400, delay: liveEvents.length > 0 ? 550 : 500 }}
+        transition={{ type: 'timing', duration: 400, delay: displayLiveEvents.length > 0 ? 550 : 500 }}
       >
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Upcoming Events</Text>
