@@ -147,6 +147,63 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// Sign in with Google
+  /// Opens browser for OAuth flow - callback handled separately
+  Future<void> signInWithGoogle() async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      await _authRepository.signInWithGoogle();
+      // OAuth flow will redirect to app - callback handles the rest
+    } catch (e) {
+      _setLoading(false);
+      _setError('Failed to start Google sign-in');
+      rethrow;
+    }
+  }
+
+  /// Sign in with Apple
+  /// Opens browser for OAuth flow - callback handled separately
+  Future<void> signInWithApple() async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      await _authRepository.signInWithApple();
+      // OAuth flow will redirect to app - callback handles the rest
+    } catch (e) {
+      _setLoading(false);
+      _setError('Failed to start Apple sign-in');
+      rethrow;
+    }
+  }
+
+  /// Handle OAuth callback from social sign-in
+  Future<void> handleAuthCallback(Uri uri) async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      await _authRepository.handleAuthCallback(uri);
+
+      // Fetch user profile after successful OAuth
+      await _fetchUserProfile();
+    } on AuthException catch (e) {
+      _setError(e.message);
+      _state = AuthState.error;
+      notifyListeners();
+      rethrow;
+    } catch (e) {
+      _setError('Failed to complete sign-in. Please try again.');
+      _state = AuthState.error;
+      notifyListeners();
+      rethrow;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
   /// Complete registration with username
   Future<void> completeRegistration(String username) async {
     _setLoading(true);

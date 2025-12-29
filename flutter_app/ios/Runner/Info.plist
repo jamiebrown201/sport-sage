@@ -45,5 +45,40 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- URL Types for OAuth callback and Google Sign-In -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<!-- OAuth callback URL scheme -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>sportsage</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sportsage</string>
+			</array>
+		</dict>
+		<!-- Google Sign-In URL scheme (reverse client ID) -->
+		<!-- TODO: Replace with your actual reversed Google Client ID -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.googleusercontent.apps</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.YOUR_IOS_CLIENT_ID</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Allow HTTP for local development (if needed) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

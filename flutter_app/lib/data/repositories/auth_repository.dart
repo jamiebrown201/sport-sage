@@ -53,6 +53,23 @@ class AuthRepository {
     await _cognitoService.signIn(email: email, password: password);
   }
 
+  /// Sign in with Google
+  /// Opens browser for OAuth flow
+  Future<void> signInWithGoogle() async {
+    await _cognitoService.signInWithGoogle();
+  }
+
+  /// Sign in with Apple
+  /// Opens browser for OAuth flow
+  Future<void> signInWithApple() async {
+    await _cognitoService.signInWithApple();
+  }
+
+  /// Handle OAuth callback from social sign-in
+  Future<void> handleAuthCallback(Uri uri) async {
+    await _cognitoService.handleAuthCallback(uri);
+  }
+
   /// Sign out
   Future<void> signOut() async {
     await _cognitoService.signOut();

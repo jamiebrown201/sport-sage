@@ -24,6 +24,13 @@ dependencies:
   # AWS Cognito Authentication
   amazon_cognito_identity_dart_2: ^3.6.3
 
+  # Social Sign-In
+  sign_in_with_apple: ^6.1.4
+  google_sign_in: ^6.2.2
+  crypto: ^3.0.6
+  url_launcher: ^6.2.5
+  app_links: ^6.3.3
+
   # Storage
   flutter_secure_storage: ^9.0.0
   shared_preferences: ^2.2.2

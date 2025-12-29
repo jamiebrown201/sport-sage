@@ -1,14 +1,48 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import '../../../core/constants/colors.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../router/route_names.dart';
 
 /// Landing screen with sign-in options
 class LandingScreen extends StatelessWidget {
   const LandingScreen({super.key});
 
+  Future<void> _handleAppleSignIn(BuildContext context) async {
+    try {
+      await context.read<AuthProvider>().signInWithApple();
+      // OAuth flow will redirect back to app
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Apple Sign-In not configured yet. Please use email.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleGoogleSignIn(BuildContext context) async {
+    try {
+      await context.read<AuthProvider>().signInWithGoogle();
+      // OAuth flow will redirect back to app
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Google Sign-In not configured yet. Please use email.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final authProvider = context.watch<AuthProvider>();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -54,24 +88,20 @@ class LandingScreen extends StatelessWidget {
               _SocialButton(
                 icon: Icons.apple,
                 label: 'Continue with Apple',
-                onPressed: () {
-                  // TODO: Apple sign in
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Apple sign in coming soon')),
-                  );
-                },
+                onPressed: authProvider.isLoading
+                    ? null
+                    : () => _handleAppleSignIn(context),
                 isPrimary: true,
+                isLoading: authProvider.isLoading,
               ),
               const SizedBox(height: 12),
               _SocialButton(
                 icon: Icons.g_mobiledata,
                 label: 'Continue with Google',
-                onPressed: () {
-                  // TODO: Google sign in
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Google sign in coming soon')),
-                  );
-                },
+                onPressed: authProvider.isLoading
+                    ? null
+                    : () => _handleGoogleSignIn(context),
+                isLoading: authProvider.isLoading,
               ),
 
               const SizedBox(height: 24),
@@ -98,7 +128,9 @@ class LandingScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () => context.go(RoutePaths.login),
+                  onPressed: authProvider.isLoading
+                      ? null
+                      : () => context.go(RoutePaths.login),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: AppColors.background,
@@ -123,7 +155,9 @@ class LandingScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 56,
                 child: OutlinedButton(
-                  onPressed: () => context.go(RoutePaths.register),
+                  onPressed: authProvider.isLoading
+                      ? null
+                      : () => context.go(RoutePaths.register),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.textPrimary,
                     side: BorderSide(color: AppColors.divider),
@@ -165,14 +199,16 @@ class LandingScreen extends StatelessWidget {
 class _SocialButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool isPrimary;
+  final bool isLoading;
 
   const _SocialButton({
     required this.icon,
     required this.label,
     required this.onPressed,
     this.isPrimary = false,
+    this.isLoading = false,
   });
 
   @override
@@ -182,7 +218,16 @@ class _SocialButton extends StatelessWidget {
       height: 56,
       child: OutlinedButton.icon(
         onPressed: onPressed,
-        icon: Icon(icon, size: 24),
+        icon: isLoading
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: isPrimary ? Colors.white : AppColors.textPrimary,
+                ),
+              )
+            : Icon(icon, size: 24),
         label: Text(
           label,
           style: const TextStyle(

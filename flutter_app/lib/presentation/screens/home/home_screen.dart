@@ -134,25 +134,27 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             // Daily topup card
-            if (walletProvider.canClaimTopup)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: _DailyTopupCard(
-                    onClaim: () async {
-                      await walletProvider.claimTopup();
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Claimed 500 coins!'),
-                            backgroundColor: AppColors.success,
-                          ),
-                        );
-                      }
-                    },
-                  ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _DailyTopupCard(
+                  canClaim: walletProvider.canClaimTopup,
+                  nextClaimAt: walletProvider.topupStatus?.nextClaimAt ??
+                      walletProvider.wallet?.nextTopupAt,
+                  onClaim: () async {
+                    await walletProvider.claimTopup();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Claimed 500 coins!'),
+                          backgroundColor: AppColors.success,
+                        ),
+                      );
+                    }
+                  },
                 ),
               ),
+            ),
 
             // Featured events section
             SliverToBoxAdapter(
@@ -338,24 +340,107 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _DailyTopupCard extends StatelessWidget {
+class _DailyTopupCard extends StatefulWidget {
+  final bool canClaim;
+  final DateTime? nextClaimAt;
   final VoidCallback onClaim;
 
-  const _DailyTopupCard({required this.onClaim});
+  const _DailyTopupCard({
+    required this.canClaim,
+    required this.nextClaimAt,
+    required this.onClaim,
+  });
+
+  @override
+  State<_DailyTopupCard> createState() => _DailyTopupCardState();
+}
+
+class _DailyTopupCardState extends State<_DailyTopupCard> {
+  late Duration _timeRemaining;
+  late bool _isReady;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTimeRemaining();
+    // Start timer to update countdown every second
+    _startTimer();
+  }
+
+  void _startTimer() {
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) {
+        setState(() {
+          _updateTimeRemaining();
+        });
+        _startTimer();
+      }
+    });
+  }
+
+  void _updateTimeRemaining() {
+    if (widget.canClaim || widget.nextClaimAt == null) {
+      _isReady = true;
+      _timeRemaining = Duration.zero;
+    } else {
+      final now = DateTime.now();
+      if (widget.nextClaimAt!.isAfter(now)) {
+        _timeRemaining = widget.nextClaimAt!.difference(now);
+        _isReady = false;
+      } else {
+        _timeRemaining = Duration.zero;
+        _isReady = true;
+      }
+    }
+  }
+
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${seconds}s';
+    } else if (minutes > 0) {
+      return '${minutes}m ${seconds}s';
+    } else {
+      return '${seconds}s';
+    }
+  }
+
+  @override
+  void didUpdateWidget(_DailyTopupCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.canClaim != widget.canClaim ||
+        oldWidget.nextClaimAt != widget.nextClaimAt) {
+      _updateTimeRemaining();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isReady = _isReady || widget.canClaim;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            AppColors.primary.withOpacity(0.2),
-            AppColors.primary.withOpacity(0.1),
-          ],
+          colors: isReady
+              ? [
+                  AppColors.primary.withOpacity(0.2),
+                  AppColors.primary.withOpacity(0.1),
+                ]
+              : [
+                  AppColors.card,
+                  AppColors.card,
+                ],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+        border: Border.all(
+          color: isReady
+              ? AppColors.primary.withOpacity(0.3)
+              : AppColors.textMuted.withOpacity(0.2),
+        ),
       ),
       child: Row(
         children: [
@@ -363,11 +448,16 @@ class _DailyTopupCard extends StatelessWidget {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.2),
+              color: isReady
+                  ? AppColors.primary.withOpacity(0.2)
+                  : AppColors.textMuted.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: const Center(
-              child: Text('🪙', style: TextStyle(fontSize: 24)),
+            child: Center(
+              child: Text(
+                isReady ? '🪙' : '⏰',
+                style: const TextStyle(fontSize: 24),
+              ),
             ),
           ),
           const SizedBox(width: 16),
@@ -376,16 +466,18 @@ class _DailyTopupCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Daily Top-up Ready!',
+                  isReady ? 'Daily Top-up Ready!' : 'Daily Top-up',
                   style: TextStyle(
                     color: AppColors.textPrimary,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 Text(
-                  'Claim 500 free coins',
+                  isReady
+                      ? 'Claim 500 free coins'
+                      : 'Next claim in ${_formatDuration(_timeRemaining)}',
                   style: TextStyle(
-                    color: AppColors.textSecondary,
+                    color: isReady ? AppColors.textSecondary : AppColors.textMuted,
                     fontSize: 12,
                   ),
                 ),
@@ -395,13 +487,13 @@ class _DailyTopupCard extends StatelessWidget {
           SizedBox(
             width: 80,
             child: ElevatedButton(
-              onPressed: onClaim,
+              onPressed: isReady ? widget.onClaim : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: AppColors.background,
+                backgroundColor: isReady ? AppColors.primary : AppColors.cardElevated,
+                foregroundColor: isReady ? AppColors.background : AppColors.textMuted,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
               ),
-              child: const Text('Claim'),
+              child: Text(isReady ? 'Claim' : 'Wait'),
             ),
           ),
         ],

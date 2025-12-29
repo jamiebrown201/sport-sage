@@ -1,19 +1,98 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:amazon_cognito_identity_dart_2/cognito.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/config/app_config.dart';
 import '../storage/secure_storage.dart';
+
+/// Custom storage adapter for Cognito SDK
+/// Uses in-memory cache with async persistence to SecureStorage
+class _CognitoStorage extends CognitoStorage {
+  final SecureStorageService _secureStorage;
+  final Map<String, String> _cache = {};
+  bool _initialized = false;
+
+  _CognitoStorage(this._secureStorage);
+
+  /// Load all Cognito keys from SecureStorage into memory cache
+  Future<void> init() async {
+    if (_initialized) return;
+
+    // Load the keys we need for session restoration
+    final prefix = 'CognitoIdentityServiceProvider.${AppConfig.cognitoClientId}';
+
+    // First load LastAuthUser
+    final lastAuthUserKey = '$prefix.LastAuthUser';
+    final lastAuthUser = await _secureStorage.read(lastAuthUserKey);
+    if (lastAuthUser != null) {
+      _cache[lastAuthUserKey] = lastAuthUser;
+
+      // Then load user-specific tokens
+      final userKeys = [
+        '$prefix.$lastAuthUser.idToken',
+        '$prefix.$lastAuthUser.accessToken',
+        '$prefix.$lastAuthUser.refreshToken',
+        '$prefix.$lastAuthUser.clockDrift',
+      ];
+
+      for (final key in userKeys) {
+        final value = await _secureStorage.read(key);
+        if (value != null) {
+          _cache[key] = value;
+        }
+      }
+    }
+
+    _initialized = true;
+  }
+
+  @override
+  Future<String?> getItem(String key) async {
+    return _cache[key];
+  }
+
+  @override
+  Future<dynamic> setItem(String key, dynamic value) async {
+    final stringValue = value.toString();
+    _cache[key] = stringValue;
+    // Persist to secure storage asynchronously
+    await _secureStorage.write(key, stringValue);
+  }
+
+  @override
+  Future<void> removeItem(String key) async {
+    _cache.remove(key);
+    await _secureStorage.delete(key);
+  }
+
+  @override
+  Future<void> clear() async {
+    // Clear only Cognito keys from cache
+    final cognitoKeys = _cache.keys
+        .where((k) => k.startsWith('CognitoIdentityServiceProvider'))
+        .toList();
+    for (final key in cognitoKeys) {
+      _cache.remove(key);
+      await _secureStorage.delete(key);
+    }
+  }
+}
 
 /// AWS Cognito authentication service
 class CognitoService {
   late final CognitoUserPool _userPool;
+  late final _CognitoStorage _cognitoStorage;
   final SecureStorageService _secureStorage;
 
   CognitoUser? _cognitoUser;
   CognitoUserSession? _session;
 
   CognitoService(this._secureStorage) {
+    _cognitoStorage = _CognitoStorage(_secureStorage);
     _userPool = CognitoUserPool(
       AppConfig.cognitoUserPoolId,
       AppConfig.cognitoClientId,
+      storage: _cognitoStorage,
     );
   }
 
@@ -35,23 +114,29 @@ class CognitoService {
   /// Initialize and restore session from storage
   Future<bool> initialize() async {
     try {
-      final username = await _secureStorage.getCognitoUsername();
-      final refreshToken = await _secureStorage.getRefreshToken();
+      // First, load the storage cache from SecureStorage
+      await _cognitoStorage.init();
 
-      if (username == null || refreshToken == null) {
+      // Get the last authenticated user from Cognito storage
+      final prefix = 'CognitoIdentityServiceProvider.${AppConfig.cognitoClientId}';
+      final lastAuthUser = await _cognitoStorage.getItem('$prefix.LastAuthUser');
+
+      if (lastAuthUser == null) {
+        print('CognitoService.initialize: No LastAuthUser found');
         return false;
       }
 
-      _cognitoUser = CognitoUser(username, _userPool);
+      _cognitoUser = CognitoUser(lastAuthUser, _userPool, storage: _cognitoStorage);
 
-      // Try to refresh the session
+      // Try to get/refresh the session
       final session = await _cognitoUser!.getSession();
       if (session != null && session.isValid()) {
         _session = session;
-        await _cacheSession();
+        print('CognitoService.initialize: Session restored successfully');
         return true;
       }
 
+      print('CognitoService.initialize: Session invalid or null');
       return false;
     } catch (e) {
       print('CognitoService.initialize error: $e');
@@ -111,7 +196,7 @@ class CognitoService {
     required String email,
     required String password,
   }) async {
-    _cognitoUser = CognitoUser(email, _userPool);
+    _cognitoUser = CognitoUser(email, _userPool, storage: _cognitoStorage);
 
     final authDetails = AuthenticationDetails(
       username: email,
@@ -120,7 +205,7 @@ class CognitoService {
 
     try {
       _session = await _cognitoUser!.authenticateUser(authDetails);
-      await _cacheSession();
+      // Session is automatically cached by the SDK via our storage adapter
       return _session!;
     } on CognitoUserNewPasswordRequiredException {
       throw AuthException('Please set a new password');
@@ -144,6 +229,124 @@ class CognitoService {
     }
   }
 
+  /// Sign in with Google via Cognito Hosted UI
+  /// Opens the browser for OAuth flow and returns when callback is received
+  Future<void> signInWithGoogle() async {
+    await _launchHostedUI(identityProvider: 'Google');
+  }
+
+  /// Sign in with Apple via Cognito Hosted UI
+  /// Opens the browser for OAuth flow and returns when callback is received
+  Future<void> signInWithApple() async {
+    await _launchHostedUI(identityProvider: 'SignInWithApple');
+  }
+
+  /// Launch Cognito Hosted UI for social sign-in
+  Future<void> _launchHostedUI({required String identityProvider}) async {
+    final cognitoDomain = 'sport-sage-dev'; // From CDK auth stack
+    final redirectUri = 'sportsage://auth/callback';
+
+    final authUrl = Uri.parse(
+      'https://$cognitoDomain.auth.${AppConfig.cognitoRegion}.amazoncognito.com/oauth2/authorize'
+      '?identity_provider=$identityProvider'
+      '&redirect_uri=${Uri.encodeComponent(redirectUri)}'
+      '&response_type=code'
+      '&client_id=${AppConfig.cognitoClientId}'
+      '&scope=email+openid+profile',
+    );
+
+    if (await canLaunchUrl(authUrl)) {
+      await launchUrl(
+        authUrl,
+        mode: LaunchMode.externalApplication,
+      );
+    } else {
+      throw AuthException('Could not launch sign-in page');
+    }
+  }
+
+  /// Handle OAuth callback from Cognito Hosted UI
+  /// Call this when the app receives a deep link with authorization code
+  Future<void> handleAuthCallback(Uri uri) async {
+    final code = uri.queryParameters['code'];
+    if (code == null) {
+      final error = uri.queryParameters['error'];
+      throw AuthException(error ?? 'Authentication failed');
+    }
+
+    // Exchange authorization code for tokens
+    await _exchangeCodeForTokens(code);
+  }
+
+  /// Exchange authorization code for Cognito tokens
+  Future<void> _exchangeCodeForTokens(String code) async {
+    final cognitoDomain = 'sport-sage-dev';
+    final redirectUri = 'sportsage://auth/callback';
+
+    final tokenUrl = Uri.parse(
+      'https://$cognitoDomain.auth.${AppConfig.cognitoRegion}.amazoncognito.com/oauth2/token',
+    );
+
+    // Make HTTP request to token endpoint
+    final response = await _postTokenRequest(
+      tokenUrl,
+      {
+        'grant_type': 'authorization_code',
+        'client_id': AppConfig.cognitoClientId,
+        'code': code,
+        'redirect_uri': redirectUri,
+      },
+    );
+
+    if (response == null) {
+      throw AuthException('Failed to exchange authorization code');
+    }
+
+    // Parse tokens and create session
+    final idToken = CognitoIdToken(response['id_token'] as String);
+    final accessToken = CognitoAccessToken(response['access_token'] as String);
+    final refreshToken = CognitoRefreshToken(response['refresh_token'] as String?);
+
+    _session = CognitoUserSession(idToken, accessToken, refreshToken: refreshToken);
+
+    // Get username from token and set up CognitoUser
+    final payload = idToken.payload;
+    final username = payload['cognito:username'] as String? ?? payload['sub'] as String;
+
+    _cognitoUser = CognitoUser(username, _userPool, storage: _cognitoStorage);
+
+    // Cache the session
+    final prefix = 'CognitoIdentityServiceProvider.${AppConfig.cognitoClientId}';
+    await _cognitoStorage.setItem('$prefix.LastAuthUser', username);
+    await _cognitoStorage.setItem('$prefix.$username.idToken', idToken.getJwtToken());
+    await _cognitoStorage.setItem('$prefix.$username.accessToken', accessToken.getJwtToken());
+    if (refreshToken.getToken() != null) {
+      await _cognitoStorage.setItem('$prefix.$username.refreshToken', refreshToken.getToken()!);
+    }
+  }
+
+  /// Make POST request to Cognito token endpoint
+  Future<Map<String, dynamic>?> _postTokenRequest(
+    Uri url,
+    Map<String, String> body,
+  ) async {
+    try {
+      final request = await HttpClient().postUrl(url);
+      request.headers.contentType = ContentType.parse('application/x-www-form-urlencoded');
+      request.write(body.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&'));
+
+      final response = await request.close();
+      final responseBody = await response.transform(utf8.decoder).join();
+
+      if (response.statusCode == 200) {
+        return json.decode(responseBody) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   /// Sign out
   Future<void> signOut() async {
     if (_cognitoUser != null) {
@@ -151,8 +354,8 @@ class CognitoService {
     }
     _session = null;
     _cognitoUser = null;
-    await _secureStorage.clearTokens();
-    await _secureStorage.delete('cognito_username');
+    // Clear the Cognito storage
+    await _cognitoStorage.clear();
   }
 
   /// Get current ID token
@@ -198,7 +401,7 @@ class CognitoService {
         throw AuthException('No refresh token available');
       }
       _session = await _cognitoUser!.refreshSession(refreshToken);
-      await _cacheSession();
+      // Session is automatically cached by the SDK via our storage adapter
     } on CognitoClientException catch (e) {
       throw _mapCognitoError(e);
     }
@@ -277,18 +480,6 @@ class CognitoService {
     final idToken = _session!.getIdToken();
     final payload = idToken.payload;
     return payload['sub'] as String?;
-  }
-
-  /// Cache session tokens to secure storage
-  Future<void> _cacheSession() async {
-    if (_session == null || _cognitoUser == null) return;
-
-    await _secureStorage.saveTokens(
-      accessToken: _session!.getAccessToken().getJwtToken()!,
-      idToken: _session!.getIdToken().getJwtToken()!,
-      refreshToken: _session!.getRefreshToken()!.getToken()!,
-    );
-    await _secureStorage.saveCognitoUsername(_cognitoUser!.username!);
   }
 
   /// Map Cognito errors to user-friendly messages

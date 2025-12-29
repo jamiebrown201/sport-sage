@@ -8,6 +8,18 @@ class AppConfig {
   static const String cognitoUserPoolId = 'eu-west-1_85f98jsbc';
   static const String cognitoClientId = '2skfsajgv0fpo2tik8g37ii1h1';
   static const String cognitoRegion = 'eu-west-1';
+  static const String cognitoIdentityPoolId = 'eu-west-1:XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'; // TODO: Add from CDK output
+
+  // Google Sign-In Configuration
+  // Get these from Google Cloud Console -> APIs & Services -> Credentials
+  static const String googleClientIdIOS = 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com'; // TODO: Add iOS client ID
+  static const String googleClientIdAndroid = 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com'; // TODO: Add Android client ID
+  static const String googleClientIdWeb = 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com'; // TODO: Add Web client ID (for Cognito)
+
+  // Apple Sign-In Configuration
+  // Get these from Apple Developer Portal
+  static const String appleServiceId = 'com.sportsage.app.signin'; // TODO: Configure in Apple Developer Portal
+  static const String appleTeamId = 'YOUR_TEAM_ID'; // TODO: Add from Apple Developer Portal
 
   // API Timeouts
   static const Duration connectTimeout = Duration(seconds: 30);
