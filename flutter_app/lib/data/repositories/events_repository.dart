@@ -74,7 +74,9 @@ class EventsRepository {
       requiresAuth: false,
     );
 
-    return Event.fromJson(response as Map<String, dynamic>);
+    // API returns {data: {...event...}}
+    final data = response['data'] as Map<String, dynamic>;
+    return Event.fromJson(data);
   }
 
   /// Get featured events

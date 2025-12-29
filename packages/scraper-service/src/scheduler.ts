@@ -37,6 +37,7 @@ let syncFixtures: (() => Promise<void>) | null = null;
 let syncOdds: (() => Promise<void>) | null = null;
 let syncLiveScores: (() => Promise<void>) | null = null;
 let transitionEvents: (() => Promise<void>) | null = null;
+let cleanupStaleEvents: (() => Promise<void>) | null = null;
 
 export async function initializeJobs(): Promise<void> {
   // Dynamic imports for job handlers
@@ -44,11 +45,13 @@ export async function initializeJobs(): Promise<void> {
   const oddsModule = await import('./jobs/sync-odds.js');
   const liveScoresModule = await import('./jobs/sync-live-scores.js');
   const transitionModule = await import('./jobs/transition-events.js');
+  const cleanupModule = await import('./jobs/cleanup-stale-events.js');
 
   syncFixtures = fixturesModule.runSyncFixtures;
   syncOdds = oddsModule.runSyncOdds;
   syncLiveScores = liveScoresModule.runSyncLiveScores;
   transitionEvents = transitionModule.runTransitionEvents;
+  cleanupStaleEvents = cleanupModule.runCleanupStaleEvents;
 }
 
 // Set to true to enable cron-based scheduling, false for manual-only testing
@@ -144,6 +147,14 @@ const jobs: JobDefinition[] = [
       const pool = getBrowserPool();
       await pool.recycleAllContexts('scheduled_rotation');
       logger.info('Scheduled browser context rotation completed');
+    },
+    enabled: CRON_ENABLED,
+  },
+  {
+    name: 'cleanup-stale-events',
+    schedule: '*/30 * * * *', // Every 30 minutes - cleanup stale "live" events
+    handler: async () => {
+      if (cleanupStaleEvents) await cleanupStaleEvents();
     },
     enabled: CRON_ENABLED,
   },
