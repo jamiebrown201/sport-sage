@@ -50,7 +50,7 @@ router.get('/metrics', (_req, res) => {
 // Manual job trigger endpoint (for testing/debugging)
 router.post('/jobs/:jobName/trigger', async (req, res) => {
   const { jobName } = req.params;
-  const validJobs = ['sync-fixtures', 'sync-odds', 'sync-live-scores', 'transition-events'];
+  const validJobs = ['sync-fixtures', 'sync-odds', 'sync-live-scores', 'transition-events', 'cleanup-stale-events', 'browser-rotation'];
 
   if (!validJobs.includes(jobName)) {
     res.status(400).json({ error: `Invalid job name. Valid jobs: ${validJobs.join(', ')}` });
