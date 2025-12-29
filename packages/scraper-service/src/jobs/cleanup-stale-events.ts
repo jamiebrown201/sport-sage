@@ -65,18 +65,6 @@ export async function runCleanupStaleEvents(): Promise<void> {
       const maxHours = MAX_LIVE_DURATION_HOURS[event.sportSlug] || MAX_LIVE_DURATION_HOURS.default;
       const maxAgeMs = maxHours * 60 * 60 * 1000;
       const eventAge = now.getTime() - new Date(event.startTime).getTime();
-      const ageHours = Math.round(eventAge / (60 * 60 * 1000) * 10) / 10;
-
-      logger.info('Checking event staleness', {
-        homeTeam: event.homeTeamName,
-        awayTeam: event.awayTeamName,
-        startTime: event.startTime,
-        ageHours,
-        maxHours,
-        sport: event.sportSlug,
-        isStale: eventAge > maxAgeMs,
-      });
-
       if (eventAge > maxAgeMs) {
         // Event has been "live" for too long - mark as finished
         logger.warn('Marking stale event as finished', {
