@@ -1,3 +1,4 @@
+// Force rebuild v2
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   getDb,
@@ -171,11 +172,12 @@ async function handleCreatePrediction(
     .where(eq(users.id, user.id));
 
   // Create prediction
+  // Note: Using sql template to cast enum values for RDS Data API compatibility
   const [newPrediction] = await db
     .insert(predictions)
     .values({
       userId: user.id,
-      type: 'single',
+      type: sql`'single'::prediction_type` as unknown as 'single',
       eventId,
       marketId: marketData.id,
       outcomeId,

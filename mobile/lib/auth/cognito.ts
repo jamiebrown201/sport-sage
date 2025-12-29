@@ -19,13 +19,98 @@ const log = (message: string, data?: unknown) => {
   }
 };
 
-// Initialize Cognito User Pool
-const userPool = new CognitoUserPool({
-  UserPoolId: AUTH_CONFIG.userPoolId,
-  ClientId: AUTH_CONFIG.clientId,
-});
+// In-memory cache for sync access (Cognito SDK requires sync methods)
+// IMPORTANT: Must be defined before cognitoStorage and initUserPool
+const memoryStorage: Record<string, string> = {};
 
-// Custom storage using SecureStore for React Native
+// Custom storage adapter for Cognito SDK (must be synchronous)
+// This uses an in-memory cache that we sync with SecureStore
+// IMPORTANT: Must be defined before initUserPool is called
+const cognitoStorage = {
+  setItem(key: string, value: string): void {
+    log(`Storage setItem: ${key}`);
+    memoryStorage[key] = value;
+    // Async persist to SecureStore (fire and forget)
+    SecureStore.setItemAsync(key, value).catch((error) => {
+      console.warn('SecureStore setItem failed:', error);
+    });
+  },
+  getItem(key: string): string | null {
+    const value = memoryStorage[key];
+    log(`Storage getItem: ${key} = ${value ? 'found' : 'null'}`);
+    return value || null;
+  },
+  removeItem(key: string): void {
+    log(`Storage removeItem: ${key}`);
+    delete memoryStorage[key];
+    // Async remove from SecureStore (fire and forget)
+    SecureStore.deleteItemAsync(key).catch((error) => {
+      console.warn('SecureStore removeItem failed:', error);
+    });
+  },
+  clear(): void {
+    log('Storage clear');
+    Object.keys(memoryStorage).forEach((key) => {
+      if (key.startsWith('CognitoIdentityServiceProvider')) {
+        delete memoryStorage[key];
+        SecureStore.deleteItemAsync(key).catch(() => {});
+      }
+    });
+  },
+};
+
+// Initialize Cognito User Pool with custom storage
+let userPool: CognitoUserPool;
+
+function initUserPool(): void {
+  userPool = new CognitoUserPool({
+    UserPoolId: AUTH_CONFIG.userPoolId,
+    ClientId: AUTH_CONFIG.clientId,
+    Storage: cognitoStorage,
+  });
+}
+
+// Initialize the pool (cognitoStorage is now defined above)
+initUserPool();
+
+// Function to load storage from SecureStore on app start
+async function loadStorageFromSecureStore(): Promise<void> {
+  log('Loading Cognito tokens from SecureStore...');
+  try {
+    // We need to load all the Cognito keys
+    // The keys follow the pattern: CognitoIdentityServiceProvider.<clientId>.<username>.<tokenType>
+    const prefix = `CognitoIdentityServiceProvider.${AUTH_CONFIG.clientId}`;
+    const keysToLoad = [
+      `${prefix}.LastAuthUser`,
+    ];
+
+    // First load LastAuthUser to know which user's tokens to load
+    const lastAuthUser = await SecureStore.getItemAsync(`${prefix}.LastAuthUser`);
+    if (lastAuthUser) {
+      memoryStorage[`${prefix}.LastAuthUser`] = lastAuthUser;
+      log('Found LastAuthUser:', lastAuthUser);
+
+      // Load tokens for this user
+      const userPrefix = `${prefix}.${lastAuthUser}`;
+      const userKeys = ['idToken', 'accessToken', 'refreshToken', 'clockDrift'];
+
+      for (const tokenKey of userKeys) {
+        const fullKey = `${userPrefix}.${tokenKey}`;
+        const value = await SecureStore.getItemAsync(fullKey);
+        if (value) {
+          memoryStorage[fullKey] = value;
+          log(`Loaded ${tokenKey}`);
+        }
+      }
+    } else {
+      log('No LastAuthUser found in SecureStore');
+    }
+  } catch (error) {
+    console.warn('Failed to load from SecureStore:', error);
+  }
+}
+
+// Custom storage using SecureStore for React Native (for our own use, not Cognito SDK)
 const secureStorage = {
   setItem: async (key: string, value: string): Promise<void> => {
     try {
@@ -72,6 +157,24 @@ export interface CognitoError {
 
 class CognitoAuthService {
   private currentUser: CognitoUser | null = null;
+  private initialized = false;
+
+  /**
+   * Initialize the auth service by loading tokens from SecureStore
+   * MUST be called before any other methods
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) {
+      log('Already initialized');
+      return;
+    }
+    log('Initializing CognitoAuthService...');
+    await loadStorageFromSecureStore();
+    // Reinitialize user pool with loaded storage
+    initUserPool();
+    this.initialized = true;
+    log('CognitoAuthService initialized');
+  }
 
   /**
    * Sign up a new user with email and password
@@ -116,6 +219,7 @@ class CognitoAuthService {
       const user = new CognitoUser({
         Username: username,
         Pool: userPool,
+        Storage: cognitoStorage,
       });
 
       user.confirmRegistration(code, true, (err, result) => {
@@ -141,6 +245,7 @@ class CognitoAuthService {
       const user = new CognitoUser({
         Username: username,
         Pool: userPool,
+        Storage: cognitoStorage,
       });
 
       user.resendConfirmationCode((err, result) => {
@@ -166,6 +271,7 @@ class CognitoAuthService {
       const user = new CognitoUser({
         Username: emailOrUsername,
         Pool: userPool,
+        Storage: cognitoStorage,
       });
 
       const authDetails = new AuthenticationDetails({
@@ -175,23 +281,15 @@ class CognitoAuthService {
 
       user.authenticateUser(authDetails, {
         onSuccess: async (session) => {
-          log('signIn success - storing tokens');
+          log('signIn success');
           this.currentUser = user;
 
-          // Store tokens securely
+          // Tokens are automatically stored by the SDK via our cognitoStorage adapter
           const idToken = session.getIdToken().getJwtToken();
           const accessToken = session.getAccessToken().getJwtToken();
           const refreshToken = session.getRefreshToken().getToken();
 
-          // Get the actual username from the token (in case they signed in with email)
-          const payload = session.getIdToken().payload;
-          const actualUsername = payload['cognito:username'] || emailOrUsername;
-
-          await secureStorage.setItem('cognito_id_token', idToken);
-          await secureStorage.setItem('cognito_access_token', accessToken);
-          await secureStorage.setItem('cognito_refresh_token', refreshToken);
-          await secureStorage.setItem('cognito_username', actualUsername);
-          log('Tokens stored successfully', { actualUsername });
+          log('Authentication successful for user:', user.getUsername());
 
           resolve({
             session,
@@ -228,7 +326,10 @@ class CognitoAuthService {
     }
     this.currentUser = null;
 
-    // Clear stored tokens
+    // Clear Cognito storage (this also clears SecureStore via our adapter)
+    cognitoStorage.clear();
+
+    // Clear our legacy stored tokens (if any)
     await secureStorage.removeItem('cognito_id_token');
     await secureStorage.removeItem('cognito_access_token');
     await secureStorage.removeItem('cognito_refresh_token');
@@ -241,40 +342,20 @@ class CognitoAuthService {
    */
   async getSession(): Promise<CognitoUserSession | null> {
     log('getSession called');
+
+    // Make sure we're initialized
+    if (!this.initialized) {
+      log('Not initialized, initializing now...');
+      await this.initialize();
+    }
+
     const user = userPool.getCurrentUser();
     if (!user) {
-      log('No current user in pool, trying to restore from storage');
-      // Try to restore from stored username
-      const username = await secureStorage.getItem('cognito_username');
-      if (!username) {
-        log('No stored username found');
-        return null;
-      }
-      log('Found stored username', { username });
-
-      const storedUser = new CognitoUser({
-        Username: username,
-        Pool: userPool,
-      });
-
-      return new Promise((resolve) => {
-        storedUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
-          if (err || !session) {
-            log('getSession from storage failed', err);
-            resolve(null);
-            return;
-          }
-          if (session.isValid()) {
-            log('Session restored from storage and is valid');
-            this.currentUser = storedUser;
-            resolve(session);
-          } else {
-            log('Session from storage is not valid');
-            resolve(null);
-          }
-        });
-      });
+      log('No current user in pool');
+      return null;
     }
+
+    log('Found current user:', user.getUsername());
 
     return new Promise((resolve) => {
       user.getSession((err: Error | null, session: CognitoUserSession | null) => {
@@ -288,8 +369,19 @@ class CognitoAuthService {
           this.currentUser = user;
           resolve(session);
         } else {
-          log('Session is not valid');
-          resolve(null);
+          log('Session is not valid, trying to refresh...');
+          // Try to refresh the session
+          const refreshToken = session.getRefreshToken();
+          user.refreshSession(refreshToken, (refreshErr, newSession) => {
+            if (refreshErr || !newSession) {
+              log('Session refresh failed', refreshErr);
+              resolve(null);
+              return;
+            }
+            log('Session refreshed successfully');
+            this.currentUser = user;
+            resolve(newSession);
+          });
         }
       });
     });
@@ -380,6 +472,7 @@ class CognitoAuthService {
       const user = new CognitoUser({
         Username: emailOrUsername,
         Pool: userPool,
+        Storage: cognitoStorage,
       });
 
       user.forgotPassword({
@@ -405,6 +498,7 @@ class CognitoAuthService {
       const user = new CognitoUser({
         Username: emailOrUsername,
         Pool: userPool,
+        Storage: cognitoStorage,
       });
 
       user.confirmPassword(code, newPassword, {

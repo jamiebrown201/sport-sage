@@ -25,7 +25,7 @@ export const environments: Record<string, EnvironmentConfig> = {
     region: 'eu-west-1',
     auroraMinCapacity: 0.5,
     auroraMaxCapacity: 2,
-    lambdaMemory: 512,
+    lambdaMemory: 1024, // Higher memory = faster cold starts
     lambdaTimeout: 30,
     enableAlarms: false,
     vpsIp: '77.42.42.185', // Hetzner VPS for scraper service

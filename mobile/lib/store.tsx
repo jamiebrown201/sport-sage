@@ -118,6 +118,10 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
         }
       }
 
+      // Initialize Cognito (loads tokens from SecureStore)
+      log('Initializing Cognito auth service...');
+      await cognitoAuth.initialize();
+
       // Check for existing Cognito session
       log('Checking for existing Cognito session...');
       const session = await cognitoAuth.getSession();

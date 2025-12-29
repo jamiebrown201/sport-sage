@@ -107,6 +107,9 @@ export default function RegisterScreen(): React.ReactElement {
     setIsLoading(true);
     setError('');
 
+    // Allow React to re-render the loading state before starting async work
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
     try {
       await register(username, email, password);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

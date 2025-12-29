@@ -51,6 +51,9 @@ export default function LoginScreen(): React.ReactElement {
     setIsLoading(true);
     setError('');
 
+    // Allow React to re-render the loading state before starting async work
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
     try {
       await login(email, password);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
